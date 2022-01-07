@@ -23,28 +23,28 @@ const usage =
     \\
 ;
 
-const Cmd = struct {
-    cmd: Type,
-    stdin: bool,
-    input_paths: std.ArrayList([]const u8),
-
-    const Type = enum {
-        on,
-        off,
-    };
-};
-
 fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.log.err(format, args);
     std.process.exit(1);
 }
 
-pub fn logErr(err: anyerror, comptime format: []const u8, args: anytype) void {
-    std.log.err(format ++ ": {s}", args ++ .{ @errorName(err) });
+fn logErr(err: anyerror, comptime format: []const u8, args: anytype) void {
+    std.log.err(format ++ ": {s}", args ++ .{@errorName(err)});
 }
 
-fn parseCmd(gpa: std.mem.Allocator, args: [][:0]const u8) !Cmd {
-    var cmd = Cmd{
+const Params = struct {
+    cmd: Cmd,
+    stdin: bool,
+    input_paths: std.ArrayList([]const u8),
+
+    const Cmd = enum {
+        on,
+        off,
+    };
+};
+
+fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) !Params {
+    var params = Params{
         .cmd = undefined,
         .stdin = false,
         .input_paths = std.ArrayList([]const u8).init(gpa),
@@ -60,7 +60,7 @@ fn parseCmd(gpa: std.mem.Allocator, args: [][:0]const u8) !Cmd {
                 std.log.info("{s}", .{usage});
                 std.process.exit(0);
             } else if (std.mem.eql(u8, arg, "--stdin")) {
-                cmd.stdin = true;
+                params.stdin = true;
             } else {
                 fatal("unrecognized parameter: '{s}'", .{arg});
             }
@@ -75,9 +75,9 @@ fn parseCmd(gpa: std.mem.Allocator, args: [][:0]const u8) !Cmd {
         // cmd
         const cmd_type = args[i];
         if (std.mem.eql(u8, cmd_type, "on")) {
-            cmd.cmd = .on;
+            params.cmd = .on;
         } else if (std.mem.eql(u8, cmd_type, "off")) {
-            cmd.cmd = .off;
+            params.cmd = .off;
         } else {
             fatal("unrecognized command: '{s}'", .{cmd_type});
         }
@@ -86,49 +86,41 @@ fn parseCmd(gpa: std.mem.Allocator, args: [][:0]const u8) !Cmd {
 
         // files
         while (i < args.len) : (i += 1) {
-            try cmd.input_paths.append(args[i]);
+            try params.input_paths.append(args[i]);
         }
     }
 
-    if (cmd.stdin) {
-        if (cmd.input_paths.items.len != 0) {
+    if (params.stdin) {
+        if (params.input_paths.items.len != 0) {
             fatal("cannot specify both --stdin and files", .{});
         }
-    } else if (cmd.input_paths.items.len == 0) {
+    } else if (params.input_paths.items.len == 0) {
         fatal("expected at least one source file argument", .{});
     }
 
-    return cmd;
+    return params;
 }
 
 fn fmtFile(
     gpa: std.mem.Allocator,
-    cmd: Cmd.Type,
-    input_name: []const u8,
+    cmd: Params.Cmd,
     input_file: *const std.fs.File,
     size_hint: ?usize,
 ) ![]u8 {
-    const source = input_file.readToEndAllocOptions(
+    const source = try input_file.readToEndAllocOptions(
         gpa,
         std.math.maxInt(u32),
         size_hint,
         @alignOf(u16),
         0,
-    ) catch |err| switch (err) {
-        error.ConnectionResetByPeer => unreachable,
-        error.ConnectionTimedOut => unreachable,
-        error.NotOpenForReading => unreachable,
-        else => |e| {
-            fatal("unable to read from {s}: {s}", .{ input_name, e });
-        },
-    };
+    );
     defer gpa.free(source);
 
     var tree = try std.zig.parse(gpa, source);
     defer tree.deinit(gpa);
 
     if (tree.errors.len != 0) {
-        fatal("{s}: parsing errors, aborting.", .{ input_name });
+        return error.ParsingError;
     }
 
     var patches = switch (cmd) {
@@ -144,70 +136,174 @@ fn fmtFile(
     return out_buffer.toOwnedSlice();
 }
 
-const FmtPathError =
-    std.fs.Dir.OpenError ||
-    std.fs.File.OpenError ||
-    std.os.WriteError ||
-    std.os.RenameError ||
-    error{ OutOfMemory }
-;
+const TopLevelDir = struct {
+    file_paths: [][]const u8,
+    cur_idx: usize = 0,
 
-fn fmtPaths(
+    fn appendPathName(
+        self: *TopLevelDir,
+        gpa: std.mem.Allocator,
+        path: []const u8,
+    ) []const u8 {
+        _ = self;
+        return gpa.dupe(u8, path) catch |err| switch (err) {
+            error.OutOfMemory => {
+                std.log.err("out of memory, aborting", .{});
+                std.process.exit(2);
+            },
+            else => unreachable,
+        };
+    }
+
+    fn getNextFileName(self: *TopLevelDir) ?[]const u8 {
+        const next_idx = self.cur_idx;
+        if (next_idx < self.file_paths.len) {
+            self.cur_idx += 1;
+            return self.file_paths[next_idx];
+        } else {
+            return null;
+        }
+    }
+
+    fn getDir(self: *TopLevelDir) std.fs.Dir {
+        _ = self;
+        return std.fs.cwd();
+    }
+};
+
+const Dir = struct {
+    dir: std.fs.Dir,
+    path: []const u8,
+    fullpath: []const u8,
+    iterator: std.fs.Dir.Iterator,
+
+    fn init(
+        parent: std.fs.Dir,
+        path: []const u8,
+        fullpath: []const u8,
+    ) !Dir {
+        var self = Dir{
+            .dir = try parent.openDir(path, .{ .iterate = true }),
+            .path = path,
+            .fullpath = fullpath,
+            .iterator = undefined,
+        };
+
+        self.iterator = self.dir.iterate();
+        return self;
+    }
+
+    fn appendPathName(self: *Dir, gpa: std.mem.Allocator, path: []const u8) []const u8 {
+        const left_len = self.fullpath.len;
+        const sep_len = std.fs.path.sep_str.len;
+        var new_path = gpa.alloc(u8, left_len + sep_len + path.len) catch |err| switch (err) {
+            error.OutOfMemory => {
+                std.log.err("out of memory, aborting", .{});
+                std.process.exit(2);
+            },
+            else => unreachable,
+        };
+        std.mem.copy(u8, new_path, self.fullpath);
+        std.mem.copy(u8, new_path[left_len..], std.fs.path.sep_str);
+        std.mem.copy(u8, new_path[left_len + sep_len ..], path);
+        return new_path;
+    }
+
+    fn getNextFileName(self: *Dir) ?[]const u8 {
+        while (self.iterator.next() catch |err| {
+            logErr(err, "failed to get files in directory {s}", .{self.fullpath});
+            return null;
+        }) |entry| {
+            switch (entry.kind) {
+                .Directory => {
+                    if (std.mem.eql(u8, entry.name, "zig-cache")) {
+                        return null;
+                    } else {
+                        return entry.name;
+                    }
+                },
+                else => {
+                    if (std.mem.endsWith(u8, entry.name, ".zig")) {
+                        return entry.name;
+                    }
+                },
+            }
+        }
+
+        return null;
+    }
+
+    fn getDir(self: *Dir) std.fs.Dir {
+        return self.dir;
+    }
+};
+
+fn fmtDir(
     gpa: std.mem.Allocator,
-    cmd: Cmd.Type,
-    parent_dir: std.fs.Dir,
-    rel_paths: [][]const u8,
-    has_error: *bool,
-) FmtPathError!void {
-    for (rel_paths) |path| {
-        //std.debug.print("checking path {s}\n", .{ path });
-        var file = parent_dir.openFile(path, .{}) catch |err| {
-            std.log.err("unable to open file '{s}': {s}", .{ path, @errorName(err) });
-            has_error.* = true;
+    cmd: Params.Cmd,
+    dir: anytype,
+) error{FmtDirError}!void {
+    var has_error = false;
+    while (dir.getNextFileName()) |path| {
+        const fullpath = dir.appendPathName(gpa, path);
+        defer gpa.free(fullpath);
+
+        var file = dir.getDir().openFile(path, .{}) catch |err| {
+            logErr(err, "unable to open file '{s}'", .{fullpath});
+            has_error = true;
             continue;
         };
         defer file.close();
 
-        const stat = try file.stat();
+        const stat = file.stat() catch |err| {
+            logErr(err, "unable to stat file '{s}'", .{fullpath});
+            has_error = true;
+            continue;
+        };
+
         if (stat.kind == .Directory) {
-            const subdir = parent_dir.openDir(path, .{ .iterate = true }) catch |err| {
-                logErr(err, "unable to open directory '{s}'", .{ path });
-                has_error.* = true;
+            var subdir = Dir.init(dir.getDir(), path, fullpath) catch |err| {
+                logErr(err, "unable to open directory '{s}'", .{fullpath});
+                has_error = true;
                 continue;
             };
-            var paths = std.ArrayList([]const u8).init(gpa);
-            defer paths.deinit();
 
-            std.debug.print("path {s} is a directory\n", .{ path });
-
-            var it = subdir.iterate();
-            while (try it.next()) |entry| {
-                if (std.mem.endsWith(u8, entry.name, ".zig")) {
-                    std.debug.print("add (file) {s} to subpaths\n", .{ entry.name });
-                    try paths.append(entry.name);
-                } else if (entry.kind == .Directory and !std.mem.eql(u8, entry.name, "zig-cache")) {
-                    std.debug.print("add (dir) {s} to subpaths\n", .{ entry.name });
-                    try paths.append(entry.name);
-                }
-            }
-
-            fmtPaths(gpa, cmd, subdir, paths.items[0..], has_error) catch |err| {
-                logErr(err, "failed to format directory '{s}'", .{ path });
-                has_error.* = true;
+            fmtDir(gpa, cmd, &subdir) catch {
+                has_error = true;
                 continue;
             };
         } else {
-            const content = try fmtFile(gpa, cmd, path, &file, stat.size);
+            const content = fmtFile(gpa, cmd, &file, stat.size) catch |err| {
+                logErr(err, "failed to format file '{s}", .{fullpath});
+                has_error = true;
+                continue;
+            };
             defer gpa.free(content);
 
-            var af = try parent_dir.atomicFile(path, .{ .mode = stat.mode });
+            var af = dir.getDir().atomicFile(path, .{ .mode = stat.mode }) catch |err| {
+                logErr(err, "failed to initialize atomic write on '{s}'", .{fullpath});
+                has_error = true;
+                continue;
+            };
             defer af.deinit();
 
-            try af.file.writeAll(content);
-            try af.finish();
-            std.log.info("{s} updated", .{path});
+            af.file.writeAll(content) catch |err| {
+                logErr(err, "failed to write content of {s} to temporary file", .{fullpath});
+                has_error = true;
+                continue;
+            };
+
+            af.finish() catch |err| {
+                logErr(err, "failed to write to {s}", .{fullpath});
+                has_error = true;
+                continue;
+            };
+            std.log.info("{s} updated", .{fullpath});
         }
     }
+
+    if (has_error)
+        return error.FmtDirError;
 }
 
 pub fn main() !void {
@@ -220,32 +316,25 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    if (args.len == 0)
-        unreachable;
+    std.debug.assert(args.len > 0);
+    const params = try parseParams(gpa, args[1..]);
+    defer params.input_paths.deinit();
 
-    const cmd = try parseCmd(gpa, args[1..]);
-    defer cmd.input_paths.deinit();
-
-    if (cmd.stdin) {
+    if (params.stdin) {
         var stdin = std.io.getStdIn();
-        const content = try fmtFile(gpa, cmd.cmd, "<stdin>", &stdin, null);
-        defer gpa.free(content);
-        try std.io.getStdOut().writeAll(content);
-    } else {
-        var has_error = false;
-        fmtPaths(
-            gpa,
-            cmd.cmd,
-            std.fs.cwd(),
-            cmd.input_paths.items[0..],
-            &has_error,
-        ) catch |err| {
-            logErr(err, "failed to format files in current directory", .{});
+        const content = fmtFile(gpa, params.cmd, &stdin, null) catch |err| {
+            logErr(err, "failed to format stdin", .{});
             std.process.exit(1);
         };
-
-        if (has_error) {
+        defer gpa.free(content);
+        std.io.getStdOut().writeAll(content) catch |err| {
+            logErr(err, "failed to write to stdout", .{});
             std.process.exit(1);
-        }
+        };
+    } else {
+        var cwd = TopLevelDir{ .file_paths = params.input_paths.items };
+        fmtDir(gpa, params.cmd, &cwd) catch {
+            std.process.exit(1);
+        };
     }
 }

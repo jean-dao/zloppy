@@ -17,6 +17,7 @@ pub const Patches = struct {
     pub const Patch = union(enum) {
         remove,
         unused_var: TokenIndex,
+        comment,
     };
 
     token_map: std.AutoHashMap(TokenIndex, PatchIndex),
@@ -102,7 +103,7 @@ fn traverseNode(
         .struct_init_dot_comma,
         .container_decl,
         .container_decl_trailing,
-         => {
+        => {
             const first = datas[node].lhs;
             const last = datas[node].rhs;
             for (tree.extra_data[first..last]) |stmt_idx| {
@@ -132,6 +133,16 @@ fn traverseNode(
             for (tree.extra_data[range.start..range.end]) |idx| {
                 try traverseNode(action, patches, tree, idx);
             }
+        },
+
+        // check sub range list from lhs and rhs (if set)
+        .switch_case => {
+            const range = tree.extraData(datas[node].lhs, Node.SubRange);
+            for (tree.extra_data[range.start..range.end]) |idx| {
+                try traverseNode(action, patches, tree, idx);
+            }
+            if (datas[node].rhs != 0)
+                try traverseNode(action, patches, tree, datas[node].rhs);
         },
 
         // both lhs and rhs must be checked (if set)
@@ -200,6 +211,8 @@ fn traverseNode(
         .call_one_comma,
         .async_call_one,
         .async_call_one_comma,
+        .switch_case_one,
+        .switch_range,
         .while_simple,
         .for_simple,
         .if_simple,
@@ -250,8 +263,6 @@ fn traverseNode(
         .test_decl,
         .@"errdefer",
         .@"defer",
-        .switch_case_one,
-        .switch_case,
         .@"break",
         => {
             if (datas[node].rhs != 0)
@@ -554,8 +565,8 @@ const RemoveZloppy = struct {
 
                 // backtrack to previous line, should only be indentation (spaces)
                 const end = end: {
-                    if (std.mem.lastIndexOf(u8, tree.source[0..name_idx - 1], "\n")) |nl_idx| {
-                        if (!std.mem.allEqual(u8, tree.source[nl_idx + 1..name_idx], ' '))
+                    if (std.mem.lastIndexOf(u8, tree.source[0 .. name_idx - 1], "\n")) |nl_idx| {
+                        if (!std.mem.allEqual(u8, tree.source[nl_idx + 1 .. name_idx], ' '))
                             break :blk;
 
                         if (nl_idx == 0)
@@ -588,15 +599,15 @@ pub fn patchTreeOn(gpa: std.mem.Allocator, tree: Tree) !Patches {
     var action = try FixupUnused.init(gpa);
     defer action.deinit();
 
-    std.debug.print("tokens:\n", .{});
-    for (tree.tokens.items(.tag)) |tag, i| {
-        std.debug.print("[{}] {}\n", .{ i, tag });
-    }
+    //std.debug.print("tokens:\n", .{});
+    //for (tree.tokens.items(.tag)) |tag, i| {
+    //    std.debug.print("[{}] {}\n", .{ i, tag });
+    //}
 
-    std.debug.print("nodes:\n", .{});
-    for (tree.nodes.items(.tag)) |tag, i| {
-        std.debug.print("[{}] {}\n", .{ i, tag });
-    }
+    //std.debug.print("nodes:\n", .{});
+    //for (tree.nodes.items(.tag)) |tag, i| {
+    //    std.debug.print("[{}] {}\n", .{ i, tag });
+    //}
 
     for (tree.rootDecls()) |node| {
         try traverseNode(&action, &patches, tree, node);
