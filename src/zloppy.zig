@@ -317,7 +317,7 @@ fn traverseNode(
     try action.after(patches, tree, node);
 }
 
-const FixupUnused = struct {
+const ZloppyChecks = struct {
     const Scope = struct {
         const Binding = struct {
             token: TokenIndex,
@@ -400,8 +400,8 @@ const FixupUnused = struct {
 
     scopes: std.ArrayList(Scope),
 
-    fn init(gpa: mem.Allocator) !FixupUnused {
-        var self = FixupUnused{
+    fn init(gpa: mem.Allocator) !ZloppyChecks {
+        var self = ZloppyChecks{
             .scopes = std.ArrayList(Scope).init(gpa),
         };
 
@@ -409,28 +409,28 @@ const FixupUnused = struct {
         return self;
     }
 
-    fn deinit(self: *FixupUnused) void {
+    fn deinit(self: *ZloppyChecks) void {
         std.debug.assert(self.scopes.items.len == 1);
         self.scopes.items[0].deinit();
         self.scopes.deinit();
     }
 
-    fn scope(self: *FixupUnused) *Scope {
+    fn scope(self: *ZloppyChecks) *Scope {
         std.debug.assert(self.scopes.items.len > 0);
         return &self.scopes.items[self.scopes.items.len - 1];
     }
 
-    fn pushScope(self: *FixupUnused, block_anchor: TokenIndex) !void {
+    fn pushScope(self: *ZloppyChecks, block_anchor: TokenIndex) !void {
         try self.scopes.append(Scope.init(self.scopes.allocator, block_anchor));
     }
 
-    fn popScope(self: *FixupUnused) void {
+    fn popScope(self: *ZloppyChecks) void {
         std.debug.assert(self.scopes.items.len > 1);
         self.scope().deinit();
         self.scopes.items.len -= 1;
     }
 
-    fn setUsed(self: *FixupUnused, tree: Tree, token: TokenIndex) void {
+    fn setUsed(self: *ZloppyChecks, tree: Tree, token: TokenIndex) void {
         var i: usize = self.scopes.items.len;
         while (i > 0) : (i -= 1) {
             if (self.scopes.items[i - 1].setUsed(tree, token))
@@ -438,12 +438,13 @@ const FixupUnused = struct {
         }
     }
 
-    fn before(self: *FixupUnused, patches: *Patches, tree: Tree, node: NodeIndex) !void {
+    fn before(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: NodeIndex) !void {
+        _ = patches;
+
         if (self.scope().return_reached) {
             self.scope().markUnreachableFrom(tree, node);
         }
 
-        _ = patches;
         switch (tree.nodes.items(.tag)[node]) {
             // create a new scope for fn decls, blocks, containers
             .fn_decl => {
@@ -488,7 +489,7 @@ const FixupUnused = struct {
         }
     }
 
-    fn after(self: *FixupUnused, patches: *Patches, tree: Tree, node: Node.Index) !void {
+    fn after(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: Node.Index) !void {
         const node_data = tree.nodes.items(.data)[node];
         const node_token = tree.nodes.items(.main_token)[node];
         switch (tree.nodes.items(.tag)[node]) {
@@ -577,8 +578,8 @@ const FixupUnused = struct {
 
 pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var patches = Patches.init(gpa);
-    var action = try FixupUnused.init(gpa);
-    defer action.deinit();
+    var checks = try ZloppyChecks.init(gpa);
+    defer checks.deinit();
 
     //std.debug.print("tokens:\n", .{});
     //for (tree.tokens.items(.tag)) |tag, i| {
@@ -591,7 +592,7 @@ pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     //}
 
     for (tree.rootDecls()) |node| {
-        try traverseNode(&action, &patches, tree, node);
+        try traverseNode(&checks, &patches, tree, node);
     }
 
     // return without checking unused variables in top-level scope (not needed)
@@ -616,8 +617,8 @@ fn cleanLine(
         // overwrite line '\n' (end + 1) to make sure no extraneous empty line is left over
         mem.set(u8, source[start .. end + 1], ' ');
     } else if (mem.startsWith(u8, descr, "unreachable code")) {
-        mem.set(u8, source[zloppy_comment_start .. end], ' ');
-        if (mem.indexOf(u8, source[start .. end], "//")) |first_comment| {
+        mem.set(u8, source[zloppy_comment_start..end], ' ');
+        if (mem.indexOf(u8, source[start..end], "//")) |first_comment| {
             mem.set(u8, source[start + first_comment .. start + first_comment + 2], ' ');
         } else {
             return error.InvalidCommentFound;
@@ -645,14 +646,13 @@ pub fn cleanSource(filename: []const u8, source: []u8) !void {
         while (i > 1) : (i -= 1) {
             const maybe_comment_start = line[i - 2 .. i];
             const char = line[i - 1];
-            if (
-                mem.eql(u8, maybe_comment_start, "//") and
-                mem.startsWith(u8, line[i - 2 ..], zloppy_comment)
-            ) {
+            if (mem.eql(u8, maybe_comment_start, "//") and
+                mem.startsWith(u8, line[i - 2 ..], zloppy_comment))
+            {
                 cleanLine(source, start, end, start + i - 2) catch |err| {
                     std.log.warn(
                         "invalid zloppy comment found in file '{s}' on line {}, " ++
-                        "file left untouched",
+                            "file left untouched",
                         .{ filename, line_no },
                     );
                     return err;

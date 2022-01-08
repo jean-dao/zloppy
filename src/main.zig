@@ -6,7 +6,7 @@ const usage =
     \\Usage: zloppy [options] [command] [file]...
     \\
     \\   Modifies the input files in-places to silence errors about
-    \\   unused variable/parameters.
+    \\   unused variable/parameters and unreachable code.
     \\   Arguments can be files or directories, which are searched
     \\   recursively.
     \\
@@ -15,10 +15,8 @@ const usage =
     \\    --stdin     Format code from stdin; output to stdout
     \\
     \\Commands:
-    \\    on          Enable sloppy mode, unused variable errors will be silenced
-    \\                by adding a `_ = <var>;` statement prefixed by `// XXX zloppy`
-    \\    off         Disable sloppy mode, statements prefixed by `// XXX zloppy`
-    \\                will be removed, as well as the comment
+    \\    on          Enable sloppy mode
+    \\    off         Disable sloppy mode
     \\
 ;
 
@@ -139,7 +137,7 @@ fn fmtFile(
     defer out_buffer.deinit();
 
     switch (cmd) {
-        .on =>  {
+        .on => {
             var patches = try zloppy.genPatches(gpa, tree);
             defer patches.deinit();
 

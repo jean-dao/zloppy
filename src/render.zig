@@ -1670,7 +1670,6 @@ fn renderBlock(
                     try renderZloppyUnused(ais, tree, token);
                 },
                 .ignore_to_block_end => |token| {
-                    std.debug.print("ignore_to_block_end from {}\n", .{token});
                     first_unreachable_stmt = token;
                 },
                 else => {},
@@ -1705,7 +1704,6 @@ fn renderBlock(
                 tree.lastToken(block_node),
             );
         }
-
     }
     ais.popIndent();
 

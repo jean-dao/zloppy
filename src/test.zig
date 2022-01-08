@@ -1,8 +1,148 @@
 const std = @import("std");
 
 const zloppy = @import("zloppy.zig");
-const renderTreeWithPatches = @import("render.zig").renderTreeWithPatches;
 
+// zig fmt: off
+const test_cases_off = [_]TestCase{
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    // existing comment
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\    // existing comment2
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    // existing comment
+            \\    // existing comment2
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    // existing comment
+            \\    // _ = bar; // XXX ZLOPPY unreachable code
+            \\    //// existing comment2 // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    // existing comment
+            \\    _ = bar;
+            \\    // existing comment2
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    // existing comment
+            \\    // _ = bar; // XXX ZLOPPY unreachable code
+            \\    //// existing comment2 // XXX ZLOPPY unreachable code
+            \\    // _ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    // existing comment
+            \\    _ = bar;
+            \\    // existing comment2
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    //while (true) { // XXX ZLOPPY unreachable code
+            \\    //_ = bar; // XXX ZLOPPY unreachable code
+            \\    //if (42 > 0) { // XXX ZLOPPY unreachable code
+            \\    //_ = 1; // XXX ZLOPPY unreachable code
+            \\    //} // XXX ZLOPPY unreachable code
+            \\    //} // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    while (true) {
+            \\        _ = bar;
+            \\        if (42 > 0) {
+            \\            _ = 1;
+            \\        }
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) u32 {
+            \\    while (true) {
+            \\        _ = bar;
+            \\        if (42 > 0) {
+            \\            return 0;
+            \\            //_ = 1; // XXX ZLOPPY unreachable code
+            \\        }
+            \\        _ = 42;
+            \\        return if (bar) 42 else 1 + 2 + 3;
+            \\        //_ = true; // XXX ZLOPPY unreachable code
+            \\        //{ // XXX ZLOPPY unreachable code
+            \\        //// some comment // XXX ZLOPPY unreachable code
+            \\        //} // XXX ZLOPPY unreachable code
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) u32 {
+            \\    while (true) {
+            \\        _ = bar;
+            \\        if (42 > 0) {
+            \\            return 0;
+            \\            _ = 1;
+            \\        }
+            \\        _ = 42;
+            \\        return if (bar) 42 else 1 + 2 + 3;
+            \\        _ = true;
+            \\        {
+            \\            // some comment
+            \\        }
+            \\    }
+            \\}
+            \\
+        ,
+    },
+};
+// zig fmt: on
+
+// zig fmt: off
 const test_cases_on = [_]TestCase{
     .{
         .input =
@@ -646,7 +786,112 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    return;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    return;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    return;
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    return;
+            \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    return;
+            \\    // some comment
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    return;
+            \\    // some comment
+            \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    return;
+            \\    _ = 42;
+            \\    while (true) {
+            \\        // some comment
+            \\        _ = true;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    return;
+            \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\    //while (true) { // XXX ZLOPPY unreachable code
+            \\    //// some comment // XXX ZLOPPY unreachable code
+            \\    //_ = true; // XXX ZLOPPY unreachable code
+            \\    //} // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    return;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\    return;
+            \\    //_ = bar; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\    //_ = bar; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+    },
 };
+// zig fmt: on
 
 fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
     try zloppy.cleanSource("<test input>", input);
@@ -661,21 +906,50 @@ fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
     var out_buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer out_buffer.deinit();
 
-    try renderTreeWithPatches(&out_buffer, tree, patches);
+    try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, patches);
     try std.testing.expectEqualStrings(expected, out_buffer.items);
 
     try out_buffer.append(0);
     return out_buffer.toOwnedSlice();
 }
 
+fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
+    try zloppy.cleanSource("<test input>", input);
+
+    var tree = try std.zig.parse(std.testing.allocator, input);
+    defer tree.deinit(std.testing.allocator);
+    try std.testing.expect(tree.errors.len == 0);
+
+    var out_buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer out_buffer.deinit();
+
+    try tree.renderToArrayList(&out_buffer);
+    try std.testing.expectEqualStrings(expected, out_buffer.items);
+
+    try out_buffer.append(0);
+    return out_buffer.toOwnedSlice();
+}
+
+fn applyFn(fun: anytype, count: u8, input: [:0]const u8, expected: [:0]const u8) !void {
+    var last_output = try std.testing.allocator.dupe(u8, input[0 .. input.len + 1]);
+    var i: u8 = 0;
+    while (i < count) : (i += 1) {
+        var output = try fun(last_output[0 .. last_output.len - 1 :0], expected);
+        std.testing.allocator.free(last_output);
+        last_output = output;
+    }
+    std.testing.allocator.free(last_output);
+}
+
+test "zloppy off" {
+    for (test_cases_off) |t| {
+        try applyFn(applyOff, 2, t.input, t.expected);
+    }
+}
+
 test "zloppy on" {
     for (test_cases_on) |t| {
-        var input = try std.testing.allocator.dupe(u8, t.input[0..t.input.len + 1]);
-        defer std.testing.allocator.free(input);
-
-        var input2 = try applyOn(input[0..input.len - 1 :0], t.expected);
-        defer std.testing.allocator.free(input2);
-        std.testing.allocator.free(try applyOn(input2[0..input2.len - 1 :0], t.expected));
+        try applyFn(applyOn, 2, t.input, t.expected);
     }
 }
 
