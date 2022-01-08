@@ -28,6 +28,16 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.process.exit(1);
 }
 
+fn fatalOom(err: anyerror) noreturn {
+    switch (err) {
+        error.OutOfMemory => {
+            std.log.err("out of memory, aborting", .{});
+            std.process.exit(2);
+        },
+        else => unreachable,
+    }
+}
+
 fn logErr(err: anyerror, comptime format: []const u8, args: anytype) void {
     std.log.err(format ++ ": {s}", args ++ .{@errorName(err)});
 }
@@ -43,7 +53,7 @@ const Params = struct {
     };
 };
 
-fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) !Params {
+fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
     var params = Params{
         .cmd = undefined,
         .stdin = false,
@@ -86,7 +96,7 @@ fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) !Params {
 
         // files
         while (i < args.len) : (i += 1) {
-            try params.input_paths.append(args[i]);
+            params.input_paths.append(args[i]) catch |err| fatalOom(err);
         }
     }
 
@@ -146,13 +156,7 @@ const TopLevelDir = struct {
         path: []const u8,
     ) []const u8 {
         _ = self;
-        return gpa.dupe(u8, path) catch |err| switch (err) {
-            error.OutOfMemory => {
-                std.log.err("out of memory, aborting", .{});
-                std.process.exit(2);
-            },
-            else => unreachable,
-        };
+        return gpa.dupe(u8, path) catch |err| fatalOom(err);
     }
 
     fn getNextFileName(self: *TopLevelDir) ?[]const u8 {
@@ -196,13 +200,7 @@ const Dir = struct {
     fn appendPathName(self: *Dir, gpa: std.mem.Allocator, path: []const u8) []const u8 {
         const left_len = self.fullpath.len;
         const sep_len = std.fs.path.sep_str.len;
-        var new_path = gpa.alloc(u8, left_len + sep_len + path.len) catch |err| switch (err) {
-            error.OutOfMemory => {
-                std.log.err("out of memory, aborting", .{});
-                std.process.exit(2);
-            },
-            else => unreachable,
-        };
+        var new_path = gpa.alloc(u8, left_len + sep_len + path.len) catch |err| fatalOom(err);
         std.mem.copy(u8, new_path, self.fullpath);
         std.mem.copy(u8, new_path[left_len..], std.fs.path.sep_str);
         std.mem.copy(u8, new_path[left_len + sep_len ..], path);
@@ -317,7 +315,7 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, args);
 
     std.debug.assert(args.len > 0);
-    const params = try parseParams(gpa, args[1..]);
+    const params = parseParams(gpa, args[1..]);
     defer params.input_paths.deinit();
 
     if (params.stdin) {
