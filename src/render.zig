@@ -19,33 +19,10 @@ const Ais = AutoIndentingStream(std.ArrayList(u8).Writer);
 const Patches = @import("zloppy.zig").Patches;
 const zloppy_comment = @import("zloppy.zig").zloppy_comment;
 
-fn isExprRemoved(patches: Patches, token: Ast.TokenIndex) bool {
-    if (patches.getForToken(token)) |tok_patches| {
-        for (tok_patches) |patch| {
-            if (patch == .remove) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-fn isCommentRemoved(patches: Patches, src_idx: usize) bool {
-    if (patches.getForSource(src_idx)) |pos_patches| {
-        for (pos_patches) |patch| {
-            if (patch == .remove) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 fn renderZloppyUnused(ais: *Ais, tree: Ast, token: Ast.TokenIndex) !void {
     const name = tokenSliceForRender(tree, token);
     try ais.writer().print("_ = {s}; {s} unused var {s}\n", .{ name, zloppy_comment, name });
+    ais.patches.rendered_comments += 1;
 }
 
 fn renderZloppyCommentedOutLines(
@@ -73,10 +50,11 @@ fn renderZloppyCommentedOutLines(
             "//{s} {s} unreachable code\n",
             .{ mem.trim(u8, line, " "), zloppy_comment },
         );
+        ais.patches.rendered_comments += 1;
     }
 }
 
-pub fn renderTreeWithPatches(buffer: *std.ArrayList(u8), tree: Ast, patches: Patches) Error!void {
+pub fn renderTreeWithPatches(buffer: *std.ArrayList(u8), tree: Ast, patches: *Patches) Error!void {
     assert(tree.errors.len == 0); // Cannot render an invalid tree.
     var auto_indenting_stream = Ais{
         .indent_delta = indent_delta,
@@ -247,9 +225,6 @@ fn renderExpression(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, 
     const main_tokens = tree.nodes.items(.main_token);
     const node_tags = tree.nodes.items(.tag);
     const datas = tree.nodes.items(.data);
-
-    if (isExprRemoved(ais.patches, main_tokens[node]))
-        return;
 
     switch (node_tags[node]) {
         // TODO remove this c_void -> anyopaque rewrite after the 0.10.0 release.
@@ -1672,7 +1647,6 @@ fn renderBlock(
                 .ignore_to_block_end => |token| {
                     first_unreachable_stmt = token;
                 },
-                else => {},
             }
         }
     }
@@ -2525,10 +2499,6 @@ fn renderComments(ais: *Ais, tree: Ast, start: usize, end: usize) Error!bool {
 
         index = 1 + (newline orelse end - 1);
 
-        if (isCommentRemoved(ais.patches, comment_start)) {
-            continue;
-        }
-
         const comment_content = mem.trimLeft(u8, trimmed_comment["//".len..], &std.ascii.spaces);
         if (ais.disabled_offset != null and mem.eql(u8, comment_content, "zig fmt: on")) {
             // Write the source for which formatting was disabled directly
@@ -2799,7 +2769,7 @@ fn AutoIndentingStream(comptime UnderlyingWriter: type) type {
         indent_next_line: usize = 0,
 
         /// patches to be applied at various places, modifying how the tree will be rendered
-        patches: Patches,
+        patches: *Patches,
 
         pub fn writer(self: *Self) Writer {
             return .{ .context = self };

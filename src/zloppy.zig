@@ -16,7 +16,6 @@ comptime {
 pub const Patches = struct {
     const PatchIndex = u32;
     pub const Patch = union(enum) {
-        remove,
         unused_var: TokenIndex,
         ignore_to_block_end: TokenIndex,
     };
@@ -24,6 +23,7 @@ pub const Patches = struct {
     token_map: std.AutoHashMap(TokenIndex, PatchIndex),
     source_map: std.AutoHashMap(usize, PatchIndex),
     patches: std.ArrayList(std.ArrayList(Patch)),
+    rendered_comments: u32 = 0,
 
     pub fn init(gpa: mem.Allocator) Patches {
         return .{
@@ -628,7 +628,8 @@ fn cleanLine(
     }
 }
 
-pub fn cleanSource(filename: []const u8, source: []u8) !void {
+pub fn cleanSource(filename: []const u8, source: []u8) !u32 {
+    var removed: u32 = 0;
     var start: usize = 0;
     var line_no: usize = 1;
     blk: while (mem.indexOfPos(u8, source, start, "\n")) |end| : ({
@@ -657,9 +658,12 @@ pub fn cleanSource(filename: []const u8, source: []u8) !void {
                     );
                     return err;
                 };
+                removed += 1;
             } else if (!isAllowedInZloppyComment(char)) {
                 continue :blk;
             }
         }
     }
+
+    return removed;
 }

@@ -64,7 +64,7 @@ fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
         while (i < args.len and std.mem.startsWith(u8, args[i], "-")) : (i += 1) {
             const arg = args[i];
             if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-                std.log.info("{s}", .{usage});
+                std.debug.print("{s}", .{usage});
                 std.process.exit(0);
             } else if (std.mem.eql(u8, arg, "--stdin")) {
                 params.stdin = true;
@@ -108,13 +108,20 @@ fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
     return params;
 }
 
+const FmtResult = struct {
+    content: []u8,
+    noop: bool,
+    comments_removed: u32,
+    comments_added: u32,
+};
+
 fn fmtFile(
     gpa: std.mem.Allocator,
     cmd: Params.Cmd,
     input_file: *const std.fs.File,
     filename: []const u8,
     size_hint: ?usize,
-) ![]u8 {
+) !FmtResult {
     const source = try input_file.readToEndAllocOptions(
         gpa,
         std.math.maxInt(u32),
@@ -124,7 +131,7 @@ fn fmtFile(
     );
     defer gpa.free(source);
 
-    try zloppy.cleanSource(filename, source);
+    const removed = try zloppy.cleanSource(filename, source);
 
     var tree = try std.zig.parse(gpa, source);
     defer tree.deinit(gpa);
@@ -136,19 +143,26 @@ fn fmtFile(
     var out_buffer = std.ArrayList(u8).init(gpa);
     defer out_buffer.deinit();
 
+    var added: u32 = 0;
     switch (cmd) {
         .on => {
             var patches = try zloppy.genPatches(gpa, tree);
             defer patches.deinit();
 
-            try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, patches);
+            try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, &patches);
+            added = patches.rendered_comments;
         },
         .off => {
             try tree.renderToArrayList(&out_buffer);
         },
     }
 
-    return out_buffer.toOwnedSlice();
+    return FmtResult{
+        .noop = std.mem.eql(u8, out_buffer.items, source),
+        .content = out_buffer.toOwnedSlice(),
+        .comments_removed = removed,
+        .comments_added = added,
+    };
 }
 
 const TopLevelDir = struct {
@@ -276,12 +290,15 @@ fn fmtDir(
                 continue;
             };
         } else {
-            const content = fmtFile(gpa, cmd, &file, fullpath, stat.size) catch |err| {
+            const result = fmtFile(gpa, cmd, &file, fullpath, stat.size) catch |err| {
                 logErr(err, "failed to format file '{s}'", .{fullpath});
                 has_error = true;
                 continue;
             };
-            defer gpa.free(content);
+            defer gpa.free(result.content);
+
+            if (result.noop)
+                continue;
 
             var af = dir.getDir().atomicFile(path, .{ .mode = stat.mode }) catch |err| {
                 logErr(err, "failed to initialize atomic write on '{s}'", .{fullpath});
@@ -290,7 +307,7 @@ fn fmtDir(
             };
             defer af.deinit();
 
-            af.file.writeAll(content) catch |err| {
+            af.file.writeAll(result.content) catch |err| {
                 logErr(err, "failed to write content of {s} to temporary file", .{fullpath});
                 has_error = true;
                 continue;
@@ -301,7 +318,15 @@ fn fmtDir(
                 has_error = true;
                 continue;
             };
-            std.log.info("{s} updated", .{fullpath});
+
+            if (result.comments_removed == 0 and result.comments_added == 0) {
+                std.debug.print("{s} updated (format only)\n", .{fullpath});
+            } else {
+                std.debug.print(
+                    "{s} updated ({} removed, {} added)\n",
+                    .{fullpath, result.comments_removed, result.comments_added },
+                );
+            }
         }
     }
 
@@ -325,12 +350,12 @@ pub fn main() !void {
 
     if (params.stdin) {
         var stdin = std.io.getStdIn();
-        const content = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null) catch |err| {
+        const result = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null) catch |err| {
             logErr(err, "failed to format stdin", .{});
             std.process.exit(1);
         };
-        defer gpa.free(content);
-        std.io.getStdOut().writeAll(content) catch |err| {
+        defer gpa.free(result.content);
+        std.io.getStdOut().writeAll(result.content) catch |err| {
             logErr(err, "failed to write to stdout", .{});
             std.process.exit(1);
         };
