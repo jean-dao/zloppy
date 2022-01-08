@@ -49,15 +49,17 @@ fn renderAdditionPatches(ais: *Ais, tree: Ast, patches: []const Patches.Patch) !
         switch (patch) {
             .unused_var => |token| {
                 const name = tokenSliceForRender(tree, token);
-                try ais.writer().print("{s} unused var {s}\n", .{ zloppy_comment, name });
-                try ais.writer().print("_ = {s};\n", .{name});
+                try ais.writer().print(
+                    "_ = {s}; {s} unused var {s}\n",
+                    .{ name, zloppy_comment, name },
+                );
             },
             else => {},
         }
     }
 }
 
-pub fn renderPatchedTree(buffer: *std.ArrayList(u8), tree: Ast, patches: Patches) Error!void {
+pub fn renderTreeWithPatches(buffer: *std.ArrayList(u8), tree: Ast, patches: Patches) Error!void {
     assert(tree.errors.len == 0); // Cannot render an invalid tree.
     var auto_indenting_stream = Ais{
         .indent_delta = indent_delta,

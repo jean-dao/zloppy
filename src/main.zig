@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const patch = @import("patch.zig");
-const renderPatchedTree = @import("render.zig").renderPatchedTree;
 
 const usage =
     \\Usage: zloppy [options] [command] [file]...
@@ -115,6 +114,7 @@ fn fmtFile(
     gpa: std.mem.Allocator,
     cmd: Params.Cmd,
     input_file: *const std.fs.File,
+    filename: []const u8,
     size_hint: ?usize,
 ) ![]u8 {
     const source = try input_file.readToEndAllocOptions(
@@ -126,6 +126,8 @@ fn fmtFile(
     );
     defer gpa.free(source);
 
+    try patch.unsloppify(filename, source);
+
     var tree = try std.zig.parse(gpa, source);
     defer tree.deinit(gpa);
 
@@ -133,16 +135,21 @@ fn fmtFile(
         return error.ParsingError;
     }
 
-    var patches = switch (cmd) {
-        .on => try patch.patchTreeOn(gpa, tree),
-        .off => try patch.patchTreeOff(gpa, tree),
-    };
-    defer patches.deinit();
-
     var out_buffer = std.ArrayList(u8).init(gpa);
     defer out_buffer.deinit();
 
-    try renderPatchedTree(&out_buffer, tree, patches);
+    switch (cmd) {
+        .on =>  {
+            var patches = try patch.genSloppyPatches(gpa, tree);
+            defer patches.deinit();
+
+            try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, patches);
+        },
+        .off => {
+            try tree.renderToArrayList(&out_buffer);
+        },
+    }
+
     return out_buffer.toOwnedSlice();
 }
 
@@ -271,8 +278,8 @@ fn fmtDir(
                 continue;
             };
         } else {
-            const content = fmtFile(gpa, cmd, &file, stat.size) catch |err| {
-                logErr(err, "failed to format file '{s}", .{fullpath});
+            const content = fmtFile(gpa, cmd, &file, fullpath, stat.size) catch |err| {
+                logErr(err, "failed to format file '{s}'", .{fullpath});
                 has_error = true;
                 continue;
             };
@@ -320,7 +327,7 @@ pub fn main() !void {
 
     if (params.stdin) {
         var stdin = std.io.getStdIn();
-        const content = fmtFile(gpa, params.cmd, &stdin, null) catch |err| {
+        const content = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null) catch |err| {
             logErr(err, "failed to format stdin", .{});
             std.process.exit(1);
         };

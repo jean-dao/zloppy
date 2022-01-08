@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 
 const Tree = std.zig.Ast;
 const Node = Tree.Node;
@@ -24,7 +25,7 @@ pub const Patches = struct {
     source_map: std.AutoHashMap(usize, PatchIndex),
     patches: std.ArrayList(std.ArrayList(Patch)),
 
-    pub fn init(gpa: std.mem.Allocator) Patches {
+    pub fn init(gpa: mem.Allocator) Patches {
         return .{
             .token_map = std.AutoHashMap(TokenIndex, PatchIndex).init(gpa),
             .source_map = std.AutoHashMap(usize, PatchIndex).init(gpa),
@@ -327,7 +328,7 @@ const FixupUnused = struct {
         bindings: std.ArrayList(Binding),
         block_anchor: TokenIndex,
 
-        fn init(gpa: std.mem.Allocator, block_anchor: TokenIndex) Scope {
+        fn init(gpa: mem.Allocator, block_anchor: TokenIndex) Scope {
             return .{
                 .bindings = std.ArrayList(Binding).init(gpa),
                 .block_anchor = block_anchor,
@@ -361,7 +362,7 @@ const FixupUnused = struct {
 
             for (self.bindings.items) |*binding| {
                 const bname = tree.tokenSlice(binding.token);
-                if (std.mem.eql(u8, name, bname)) {
+                if (mem.eql(u8, name, bname)) {
                     binding.used = true;
                     return true;
                 }
@@ -373,7 +374,7 @@ const FixupUnused = struct {
 
     scopes: std.ArrayList(Scope),
 
-    fn init(gpa: std.mem.Allocator) !FixupUnused {
+    fn init(gpa: mem.Allocator) !FixupUnused {
         var self = FixupUnused{
             .scopes = std.ArrayList(Scope).init(gpa),
         };
@@ -539,62 +540,7 @@ const FixupUnused = struct {
     }
 };
 
-const RemoveZloppy = struct {
-    fn before(self: *RemoveZloppy, patches: *Patches, tree: Tree, node: NodeIndex) !void {
-        _ = self;
-        _ = patches;
-        _ = tree;
-        _ = node;
-    }
-
-    fn after(self: *RemoveZloppy, patches: *Patches, tree: Tree, node: NodeIndex) !void {
-        _ = self;
-        switch (tree.nodes.items(.tag)[node]) {
-            // find '_ = ...' assignments with a '// XXX ZLOPPY' comment on the previous line
-            // mark both the comment and the assignment for removal
-            .assign => blk: {
-                const lhs = tree.nodes.items(.data)[node].lhs;
-                const name = tree.nodes.items(.main_token)[lhs];
-
-                if (!std.mem.eql(u8, tree.tokenSlice(name), "_"))
-                    break :blk;
-
-                const name_idx = tree.tokens.items(.start)[name];
-                if (name_idx == 0)
-                    break :blk;
-
-                // backtrack to previous line, should only be indentation (spaces)
-                const end = end: {
-                    if (std.mem.lastIndexOf(u8, tree.source[0 .. name_idx - 1], "\n")) |nl_idx| {
-                        if (!std.mem.allEqual(u8, tree.source[nl_idx + 1 .. name_idx], ' '))
-                            break :blk;
-
-                        if (nl_idx == 0)
-                            break :blk;
-                        break :end nl_idx;
-                    } else {
-                        break :blk;
-                    }
-                };
-
-                // find out if previous line contains '// XXX ZLOPPY'
-                if (std.mem.lastIndexOf(u8, tree.source[0..end], "\n")) |start| {
-                    const line = tree.source[start..end];
-                    if (std.mem.indexOf(u8, line, zloppy_comment)) |offset| {
-                        // mark comment to be removed
-                        try patches.addOnSource(start + offset, .remove);
-                        // mark var decl to be removed
-                        try patches.addOnToken(tree.nodes.items(.main_token)[node], .remove);
-                    }
-                }
-            },
-
-            else => {},
-        }
-    }
-};
-
-pub fn patchTreeOn(gpa: std.mem.Allocator, tree: Tree) !Patches {
+pub fn genSloppyPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var patches = Patches.init(gpa);
     var action = try FixupUnused.init(gpa);
     defer action.deinit();
@@ -613,17 +559,53 @@ pub fn patchTreeOn(gpa: std.mem.Allocator, tree: Tree) !Patches {
         try traverseNode(&action, &patches, tree, node);
     }
 
-    // return without checking unused variables in top-level scope
+    // return without checking unused variables in top-level scope (not needed)
     return patches;
 }
 
-pub fn patchTreeOff(gpa: std.mem.Allocator, tree: Tree) !Patches {
-    var patches = Patches.init(gpa);
-    var action = RemoveZloppy{};
+fn isAllowedInZloppyComment(char: u8) bool {
+    return switch (char) {
+        '"', '/', '\'', ';', ',', '{', '}' => false,
+        else => true,
+    };
+}
 
-    for (tree.rootDecls()) |node| {
-        try traverseNode(&action, &patches, tree, node);
+pub fn unsloppify(filename: []const u8, source: []u8) !void {
+    var start: usize = 0;
+    var line_no: usize = 1;
+    blk: while (mem.indexOfPos(u8, source, start, "\n")) |end| : ({
+        start = end + 1;
+        line_no += 1;
+    }) {
+        const line = source[start..end];
+        if (line.len < zloppy_comment.len)
+            continue :blk;
+
+        // Since not all characters are allowed in zloppy comments, we can
+        // simply look for "// XXX ZLOPPY" from the end of the line without
+        // having to check for string literals and such.
+        var i: usize = line.len;
+        while (i > 1) : (i -= 1) {
+            const maybe_comment_start = line[i - 2 .. i];
+            const char = line[i - 1];
+            if (
+                mem.eql(u8, maybe_comment_start, "//") and
+                mem.startsWith(u8, line[i - 2 ..], zloppy_comment)
+            ) {
+                const descr = mem.trimLeft(u8, line[i - 2 + zloppy_comment.len ..], " ");
+                if (mem.startsWith(u8, descr, "unused var")) {
+                    mem.set(u8, source[start .. end], ' ');
+                } else {
+                    std.log.warn(
+                        "invalid zloppy comment found in file '{s}' on line {}, " ++
+                        "file left untouched",
+                        .{ filename, line_no },
+                    );
+                    return error.InvalidCommentFound;
+                }
+            } else if (!isAllowedInZloppyComment(char)) {
+                continue :blk;
+            }
+        }
     }
-
-    return patches;
 }
