@@ -17,6 +17,7 @@ pub const Error = Ast.RenderError;
 const Ais = AutoIndentingStream(std.ArrayList(u8).Writer);
 
 const Patches = @import("patch.zig").Patches;
+const zloppy_comment = @import("patch.zig").zloppy_comment;
 
 fn isExprRemoved(patches: Patches, token: Ast.TokenIndex) bool {
     if (patches.getForToken(token)) |tok_patches| {
@@ -42,20 +43,36 @@ fn isCommentRemoved(patches: Patches, src_idx: usize) bool {
     return false;
 }
 
-fn renderAdditionPatches(ais: *Ais, tree: Ast, patches: []const Patches.Patch) !void {
-    const zloppy_comment = @import("patch.zig").zloppy_comment;
+fn renderZloppyUnused(ais: *Ais, tree: Ast, token: Ast.TokenIndex) !void {
+    const name = tokenSliceForRender(tree, token);
+    try ais.writer().print("_ = {s}; {s} unused var {s}\n", .{ name, zloppy_comment, name });
+}
 
-    for (patches) |patch| {
-        switch (patch) {
-            .unused_var => |token| {
-                const name = tokenSliceForRender(tree, token);
-                try ais.writer().print(
-                    "_ = {s}; {s} unused var {s}\n",
-                    .{ name, zloppy_comment, name },
-                );
-            },
-            else => {},
-        }
+fn renderZloppyCommentedOutLines(
+    ais: *Ais,
+    tree: Ast,
+    from_token: Ast.TokenIndex,
+    to_token: Ast.TokenIndex,
+) !void {
+    // get last new line before from_token (first token of first commented out statement)
+    const from_tok_pos = tree.tokens.items(.start)[from_token];
+    const from_pos =
+        if (mem.lastIndexOf(u8, tree.source[0..from_tok_pos], "\n")) |pos| pos + 1 else 0;
+
+    // get last new line before to_token (rbrace of block containing commented out statements)
+    std.debug.assert(tree.tokens.items(.tag)[to_token] == .r_brace);
+    const to_tok_pos = tree.tokens.items(.start)[to_token];
+    const to_pos =
+        if (mem.lastIndexOf(u8, tree.source[0..to_tok_pos], "\n")) |pos| pos else unreachable;
+
+    // comment out all lines between from_pos and to_pos
+    var it = mem.split(u8, tree.source[from_pos..to_pos], "\n");
+    while (it.next()) |line| {
+        // remove all indent and trailing white spaces
+        try ais.writer().print(
+            "//{s} {s} unreachable code\n",
+            .{ mem.trim(u8, line, " "), zloppy_comment },
+        );
     }
 }
 
@@ -982,7 +999,12 @@ fn renderVarDecl(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.VarDec
     try renderVarDeclInner(gpa, ais, tree, var_decl);
 
     if (ais.patches.getForToken(var_decl.ast.mut_token)) |tok_patches| {
-        try renderAdditionPatches(ais, tree, tok_patches);
+        for (tok_patches) |patch| {
+            switch (patch) {
+                .unused_var => |token| try renderZloppyUnused(ais, tree, token),
+                else => {},
+            }
+        }
     }
 }
 
@@ -1634,20 +1656,33 @@ fn renderBlock(
     }
 
     ais.pushIndentNextLine();
-    if (statements.len == 0) {
-        if (ais.patches.getForToken(lbrace)) |tok_patches| {
-            try renderToken(ais, tree, lbrace, .newline);
-            try renderAdditionPatches(ais, tree, tok_patches);
-        } else {
-            try renderToken(ais, tree, lbrace, .none);
+
+    var first_unreachable: Ast.TokenIndex = 0;
+    if (ais.patches.getForToken(lbrace)) |tok_patches| {
+        try renderToken(ais, tree, lbrace, .newline);
+        for (tok_patches) |patch| {
+            switch (patch) {
+                .unused_var => |token| try renderZloppyUnused(ais, tree, token),
+                .ignore_to_block_end => |token| {
+                    std.debug.print("ignore_to_block_end from {}\n", .{token});
+                    first_unreachable = token;
+                },
+                else => {},
+            }
         }
+    } else if (statements.len == 0) {
+        try renderToken(ais, tree, lbrace, .none);
     } else {
         try renderToken(ais, tree, lbrace, .newline);
-        if (ais.patches.getForToken(lbrace)) |tok_patches| {
-            try renderAdditionPatches(ais, tree, tok_patches);
-        }
+    }
+
+    if (statements.len > 0) {
         for (statements) |stmt, i| {
             if (i != 0) try renderExtraNewline(ais, tree, stmt);
+
+            if (tree.nodes.items(.main_token)[stmt] == first_unreachable)
+                break;
+
             switch (node_tags[stmt]) {
                 .global_var_decl => try renderVarDecl(gpa, ais, tree, tree.globalVarDecl(stmt)),
                 .local_var_decl => try renderVarDecl(gpa, ais, tree, tree.localVarDecl(stmt)),
@@ -1656,6 +1691,16 @@ fn renderBlock(
                 else => try renderExpression(gpa, ais, tree, stmt, .semicolon),
             }
         }
+
+        if (first_unreachable != 0) {
+            try renderZloppyCommentedOutLines(
+                ais,
+                tree,
+                first_unreachable,
+                tree.lastToken(block_node),
+            );
+        }
+
     }
     ais.popIndent();
 

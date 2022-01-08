@@ -18,7 +18,7 @@ pub const Patches = struct {
     pub const Patch = union(enum) {
         remove,
         unused_var: TokenIndex,
-        comment,
+        ignore_to_block_end: TokenIndex,
     };
 
     token_map: std.AutoHashMap(TokenIndex, PatchIndex),
@@ -327,11 +327,15 @@ const FixupUnused = struct {
 
         bindings: std.ArrayList(Binding),
         block_anchor: TokenIndex,
+        return_reached: bool,
+        unreachable_from: ?TokenIndex,
 
         fn init(gpa: mem.Allocator, block_anchor: TokenIndex) Scope {
             return .{
                 .bindings = std.ArrayList(Binding).init(gpa),
                 .block_anchor = block_anchor,
+                .return_reached = false,
+                .unreachable_from = null,
             };
         }
 
@@ -339,23 +343,46 @@ const FixupUnused = struct {
             self.bindings.deinit();
         }
 
-        fn patchUnused(self: Scope, patches: *Patches) !void {
+        fn addPatches(self: Scope, patches: *Patches) !void {
             for (self.bindings.items) |binding| {
                 if (!binding.used) {
                     try patches.addOnToken(binding.anchor, .{ .unused_var = binding.token });
                 }
             }
+
+            if (self.unreachable_from) |token| {
+                try patches.addOnToken(self.block_anchor, .{ .ignore_to_block_end = token });
+            }
         }
 
         fn addBinding(self: *Scope, token: TokenIndex) !void {
+            if (self.return_reached)
+                return;
             try self.bindings.append(.{ .token = token, .anchor = self.block_anchor });
         }
 
         fn addBindingWithAnchor(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
+            if (self.return_reached)
+                return;
             try self.bindings.append(.{ .token = token, .anchor = anchor });
         }
 
+        fn markReturn(self: *Scope) void {
+            self.return_reached = true;
+        }
+
+        fn markUnreachableFrom(self: *Scope, tree: Tree, node: NodeIndex) void {
+            if (self.unreachable_from == null) {
+                self.unreachable_from = tree.nodes.items(.main_token)[node];
+                std.debug.print("unreachable from {} (tok={})\n", .{node, self.unreachable_from});
+            }
+        }
+
         fn setUsed(self: *Scope, tree: Tree, token: TokenIndex) bool {
+            // still return true, since we don't want to check parent scope
+            if (self.return_reached)
+                return true;
+
             const tag = tree.tokens.items(.tag)[token];
             std.debug.assert(tag == .identifier);
             const name = tree.tokenSlice(token);
@@ -413,6 +440,10 @@ const FixupUnused = struct {
     }
 
     fn before(self: *FixupUnused, patches: *Patches, tree: Tree, node: NodeIndex) !void {
+        if (self.scope().return_reached) {
+            self.scope().markUnreachableFrom(tree, node);
+        }
+
         _ = patches;
         switch (tree.nodes.items(.tag)[node]) {
             // create a new scope for fn decls, blocks, containers
@@ -469,7 +500,7 @@ const FixupUnused = struct {
             .block,
             .block_semicolon,
             => {
-                try self.scope().patchUnused(patches);
+                try self.scope().addPatches(patches);
                 self.popScope();
             },
             .switch_case_one,
@@ -480,7 +511,7 @@ const FixupUnused = struct {
                 const rhs = tree.nodes.items(.data)[node].rhs;
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.scope().patchUnused(patches);
+                    try self.scope().addPatches(patches);
                     self.popScope();
                 }
             },
@@ -535,6 +566,11 @@ const FixupUnused = struct {
                 self.setUsed(tree, node_token);
             },
 
+            // indicate next statements in scope will unreachable
+            .@"return" => {
+                self.scope().markReturn();
+            },
+
             else => {},
         }
     }
@@ -545,15 +581,15 @@ pub fn genSloppyPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var action = try FixupUnused.init(gpa);
     defer action.deinit();
 
-    //std.debug.print("tokens:\n", .{});
-    //for (tree.tokens.items(.tag)) |tag, i| {
-    //    std.debug.print("[{}] {}\n", .{ i, tag });
-    //}
+    std.debug.print("tokens:\n", .{});
+    for (tree.tokens.items(.tag)) |tag, i| {
+        std.debug.print("[{}] {}\n", .{ i, tag });
+    }
 
-    //std.debug.print("nodes:\n", .{});
-    //for (tree.nodes.items(.tag)) |tag, i| {
-    //    std.debug.print("[{}] {}\n", .{ i, tag });
-    //}
+    std.debug.print("nodes:\n", .{});
+    for (tree.nodes.items(.tag)) |tag, i| {
+        std.debug.print("[{}] {}\n", .{ i, tag });
+    }
 
     for (tree.rootDecls()) |node| {
         try traverseNode(&action, &patches, tree, node);
@@ -568,6 +604,30 @@ fn isAllowedInZloppyComment(char: u8) bool {
         '"', '/', '\'', ';', ',', '{', '}' => false,
         else => true,
     };
+}
+
+fn unsloppifyLine(
+    source: []u8,
+    start: usize,
+    end: usize,
+    zloppy_comment_start: usize,
+) !void {
+    const descr = mem.trimLeft(u8, source[zloppy_comment_start + zloppy_comment.len .. end], " ");
+    std.debug.print("descr = '{s}'\n", .{ descr });
+
+    if (mem.startsWith(u8, descr, "unused var")) {
+        mem.set(u8, source[start .. end], ' ');
+    } else if (mem.startsWith(u8, descr, "unreachable code")) {
+        mem.set(u8, source[zloppy_comment_start .. end], ' ');
+        std.debug.print("line = '{s}'\n", .{source[start .. end]});
+        if (mem.indexOf(u8, source[start .. end], "//")) |first_comment| {
+            mem.set(u8, source[start + first_comment .. start + first_comment + 2], ' ');
+        } else {
+            return error.InvalidCommentFound;
+        }
+    } else {
+        return error.InvalidCommentFound;
+    }
 }
 
 pub fn unsloppify(filename: []const u8, source: []u8) !void {
@@ -592,17 +652,14 @@ pub fn unsloppify(filename: []const u8, source: []u8) !void {
                 mem.eql(u8, maybe_comment_start, "//") and
                 mem.startsWith(u8, line[i - 2 ..], zloppy_comment)
             ) {
-                const descr = mem.trimLeft(u8, line[i - 2 + zloppy_comment.len ..], " ");
-                if (mem.startsWith(u8, descr, "unused var")) {
-                    mem.set(u8, source[start .. end], ' ');
-                } else {
+                unsloppifyLine(source, start, end, start + i - 2) catch |err| {
                     std.log.warn(
                         "invalid zloppy comment found in file '{s}' on line {}, " ++
                         "file left untouched",
                         .{ filename, line_no },
                     );
-                    return error.InvalidCommentFound;
-                }
+                    return err;
+                };
             } else if (!isAllowedInZloppyComment(char)) {
                 continue :blk;
             }
