@@ -1657,30 +1657,35 @@ fn renderBlock(
 
     ais.pushIndentNextLine();
 
-    var first_unreachable: Ast.TokenIndex = 0;
+    var first_unreachable_stmt: Ast.TokenIndex = 0;
+    var lbrace_rendered = false;
     if (ais.patches.getForToken(lbrace)) |tok_patches| {
-        try renderToken(ais, tree, lbrace, .newline);
         for (tok_patches) |patch| {
             switch (patch) {
-                .unused_var => |token| try renderZloppyUnused(ais, tree, token),
+                .unused_var => |token| {
+                    if (!lbrace_rendered) {
+                        try renderToken(ais, tree, lbrace, .newline);
+                        lbrace_rendered = true;
+                    }
+                    try renderZloppyUnused(ais, tree, token);
+                },
                 .ignore_to_block_end => |token| {
                     std.debug.print("ignore_to_block_end from {}\n", .{token});
-                    first_unreachable = token;
+                    first_unreachable_stmt = token;
                 },
                 else => {},
             }
         }
-    } else if (statements.len == 0) {
-        try renderToken(ais, tree, lbrace, .none);
-    } else {
-        try renderToken(ais, tree, lbrace, .newline);
     }
+
+    if (!lbrace_rendered)
+        try renderToken(ais, tree, lbrace, if (statements.len == 0) .none else .newline);
 
     if (statements.len > 0) {
         for (statements) |stmt, i| {
             if (i != 0) try renderExtraNewline(ais, tree, stmt);
 
-            if (tree.nodes.items(.main_token)[stmt] == first_unreachable)
+            if (tree.nodes.items(.main_token)[stmt] == first_unreachable_stmt)
                 break;
 
             switch (node_tags[stmt]) {
@@ -1692,11 +1697,11 @@ fn renderBlock(
             }
         }
 
-        if (first_unreachable != 0) {
+        if (first_unreachable_stmt != 0) {
             try renderZloppyCommentedOutLines(
                 ais,
                 tree,
-                first_unreachable,
+                first_unreachable_stmt,
                 tree.lastToken(block_node),
             );
         }

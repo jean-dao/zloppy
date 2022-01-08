@@ -580,15 +580,15 @@ pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var action = try FixupUnused.init(gpa);
     defer action.deinit();
 
-    std.debug.print("tokens:\n", .{});
-    for (tree.tokens.items(.tag)) |tag, i| {
-        std.debug.print("[{}] {}\n", .{ i, tag });
-    }
+    //std.debug.print("tokens:\n", .{});
+    //for (tree.tokens.items(.tag)) |tag, i| {
+    //    std.debug.print("[{}] {}\n", .{ i, tag });
+    //}
 
-    std.debug.print("nodes:\n", .{});
-    for (tree.nodes.items(.tag)) |tag, i| {
-        std.debug.print("[{}] {}\n", .{ i, tag });
-    }
+    //std.debug.print("nodes:\n", .{});
+    //for (tree.nodes.items(.tag)) |tag, i| {
+    //    std.debug.print("[{}] {}\n", .{ i, tag });
+    //}
 
     for (tree.rootDecls()) |node| {
         try traverseNode(&action, &patches, tree, node);
@@ -613,7 +613,8 @@ fn cleanLine(
 ) !void {
     const descr = mem.trimLeft(u8, source[zloppy_comment_start + zloppy_comment.len .. end], " ");
     if (mem.startsWith(u8, descr, "unused var")) {
-        mem.set(u8, source[start .. end], ' ');
+        // overwrite line '\n' (end + 1) to make sure no extraneous empty line is left over
+        mem.set(u8, source[start .. end + 1], ' ');
     } else if (mem.startsWith(u8, descr, "unreachable code")) {
         mem.set(u8, source[zloppy_comment_start .. end], ' ');
         if (mem.indexOf(u8, source[start .. end], "//")) |first_comment| {
