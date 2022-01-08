@@ -374,7 +374,6 @@ const FixupUnused = struct {
         fn markUnreachableFrom(self: *Scope, tree: Tree, node: NodeIndex) void {
             if (self.unreachable_from == null) {
                 self.unreachable_from = tree.nodes.items(.main_token)[node];
-                std.debug.print("unreachable from {} (tok={})\n", .{node, self.unreachable_from});
             }
         }
 
@@ -576,7 +575,7 @@ const FixupUnused = struct {
     }
 };
 
-pub fn genSloppyPatches(gpa: mem.Allocator, tree: Tree) !Patches {
+pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var patches = Patches.init(gpa);
     var action = try FixupUnused.init(gpa);
     defer action.deinit();
@@ -606,20 +605,17 @@ fn isAllowedInZloppyComment(char: u8) bool {
     };
 }
 
-fn unsloppifyLine(
+fn cleanLine(
     source: []u8,
     start: usize,
     end: usize,
     zloppy_comment_start: usize,
 ) !void {
     const descr = mem.trimLeft(u8, source[zloppy_comment_start + zloppy_comment.len .. end], " ");
-    std.debug.print("descr = '{s}'\n", .{ descr });
-
     if (mem.startsWith(u8, descr, "unused var")) {
         mem.set(u8, source[start .. end], ' ');
     } else if (mem.startsWith(u8, descr, "unreachable code")) {
         mem.set(u8, source[zloppy_comment_start .. end], ' ');
-        std.debug.print("line = '{s}'\n", .{source[start .. end]});
         if (mem.indexOf(u8, source[start .. end], "//")) |first_comment| {
             mem.set(u8, source[start + first_comment .. start + first_comment + 2], ' ');
         } else {
@@ -630,7 +626,7 @@ fn unsloppifyLine(
     }
 }
 
-pub fn unsloppify(filename: []const u8, source: []u8) !void {
+pub fn cleanSource(filename: []const u8, source: []u8) !void {
     var start: usize = 0;
     var line_no: usize = 1;
     blk: while (mem.indexOfPos(u8, source, start, "\n")) |end| : ({
@@ -652,7 +648,7 @@ pub fn unsloppify(filename: []const u8, source: []u8) !void {
                 mem.eql(u8, maybe_comment_start, "//") and
                 mem.startsWith(u8, line[i - 2 ..], zloppy_comment)
             ) {
-                unsloppifyLine(source, start, end, start + i - 2) catch |err| {
+                cleanLine(source, start, end, start + i - 2) catch |err| {
                     std.log.warn(
                         "invalid zloppy comment found in file '{s}' on line {}, " ++
                         "file left untouched",

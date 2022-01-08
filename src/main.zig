@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const patch = @import("patch.zig");
+const zloppy = @import("zloppy.zig");
 
 const usage =
     \\Usage: zloppy [options] [command] [file]...
@@ -126,7 +126,7 @@ fn fmtFile(
     );
     defer gpa.free(source);
 
-    try patch.unsloppify(filename, source);
+    try zloppy.cleanSource(filename, source);
 
     var tree = try std.zig.parse(gpa, source);
     defer tree.deinit(gpa);
@@ -140,7 +140,7 @@ fn fmtFile(
 
     switch (cmd) {
         .on =>  {
-            var patches = try patch.genSloppyPatches(gpa, tree);
+            var patches = try zloppy.genPatches(gpa, tree);
             defer patches.deinit();
 
             try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, patches);

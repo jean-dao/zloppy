@@ -16,8 +16,8 @@ pub const Error = Ast.RenderError;
 
 const Ais = AutoIndentingStream(std.ArrayList(u8).Writer);
 
-const Patches = @import("patch.zig").Patches;
-const zloppy_comment = @import("patch.zig").zloppy_comment;
+const Patches = @import("zloppy.zig").Patches;
+const zloppy_comment = @import("zloppy.zig").zloppy_comment;
 
 fn isExprRemoved(patches: Patches, token: Ast.TokenIndex) bool {
     if (patches.getForToken(token)) |tok_patches| {
