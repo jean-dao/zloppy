@@ -221,11 +221,36 @@ fn renderExpressions(gpa: Allocator, ais: *Ais, tree: Ast, expressions: []const 
 }
 
 fn renderExpression(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, space: Space) Error!void {
+    // If patches are anchored on this node, and this node is not a block, it
+    // means the expression is a single-statement then_expr and must be
+    // rendered surrounded by a block, to include the related zloppy patches
+    if (!nodeIsBlock(tree.nodes.items(.tag)[node])) {
+        if (ais.patches.get(tree.nodes.items(.main_token)[node])) |tok_patches| {
+            try ais.writer().writeAll("{\n");
+            ais.pushIndent();
+            for (tok_patches) |patch| {
+                switch (patch) {
+                    .unused_var => |token| {
+                        try renderZloppyUnused(ais, tree, token);
+                    },
+                    else => {},
+                }
+            }
+            try renderExpressionInner(gpa, ais, tree, node, .semicolon);
+            ais.popIndent();
+            try ais.writer().writeAll("}\n");
+            return;
+        }
+    }
+
+    return renderExpressionInner(gpa, ais, tree, node, space);
+}
+
+fn renderExpressionInner(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, space: Space) Error!void {
     const token_tags = tree.tokens.items(.tag);
     const main_tokens = tree.nodes.items(.main_token);
     const node_tags = tree.nodes.items(.tag);
     const datas = tree.nodes.items(.data);
-
     switch (node_tags[node]) {
         // TODO remove this c_void -> anyopaque rewrite after the 0.10.0 release.
         // Also get rid of renderSpace() as it will no longer be necessary.
@@ -1161,7 +1186,10 @@ fn renderWhile(gpa: Allocator, ais: *Ais, tree: Ast, while_node: Ast.full.While,
         last_prefix_token = tree.lastToken(while_node.ast.cont_expr) + 1; // rparen
     }
 
-    const then_expr_is_block = nodeIsBlock(node_tags[while_node.ast.then_expr]);
+    // then_expr should be changed to a block if it is a single stmt with attached patches
+    const patches = ais.patches.get(tree.nodes.items(.main_token)[while_node.ast.then_expr]);
+    const then_expr_is_block = nodeIsBlock(node_tags[while_node.ast.then_expr]) or
+        patches != null;
     const indent_then_expr = !then_expr_is_block and
         !tree.tokensOnSameLine(last_prefix_token, tree.firstToken(while_node.ast.then_expr));
     if (indent_then_expr or (then_expr_is_block and ais.isLineOverIndented())) {

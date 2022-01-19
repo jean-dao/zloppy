@@ -449,6 +449,7 @@ const ZloppyChecks = struct {
                 try self.pushScope(tree.nodes.items(.main_token)[node]);
             },
 
+            // create a new scope for single statement (no block) if/for/while body
             // create a new scope and add the capture binding for captures
             .switch_case_one,
             .while_simple,
@@ -456,6 +457,7 @@ const ZloppyChecks = struct {
             .if_simple,
             => {
                 const rhs = tree.nodes.items(.data)[node].rhs;
+                const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
                     const anchor = tree.nodes.items(.main_token)[rhs];
@@ -464,6 +466,8 @@ const ZloppyChecks = struct {
                     const capture = maybe_capture - 1;
                     std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
                     try self.scope().addBinding(capture);
+                } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
+                    try self.pushScope(0);
                 }
             },
             else => {},
@@ -490,8 +494,12 @@ const ZloppyChecks = struct {
             .if_simple,
             => {
                 const rhs = tree.nodes.items(.data)[node].rhs;
+                const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
+                    try self.scope().addPatches(patches);
+                    self.popScope();
+                } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
                     try self.scope().addPatches(patches);
                     self.popScope();
                 }

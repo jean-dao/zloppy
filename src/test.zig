@@ -890,6 +890,82 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    if (true)
+            \\        return;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    if (true)
+            \\        return;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    if (true) {
+            \\        return;
+            \\    }
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    if (true) {
+            \\        return;
+            \\    }
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    while (true)
+            \\        return;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    while (true)
+            \\        return;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    for ([_]u8{ 1, 2, 3 }) |baz|
+            \\        _ = 42;
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    for ([_]u8{ 1, 2, 3 }) |baz| {
+            \\        _ = baz; // XXX ZLOPPY unused var baz
+            \\        _ = 42;
+            \\    }
+            \\    _ = bar;
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
