@@ -452,6 +452,7 @@ const ZloppyChecks = struct {
             // create a new scope for single statement (no block) if/for/while body
             // create a new scope and add the capture binding for captures
             .switch_case_one,
+            .switch_case,
             .while_simple,
             .for_simple,
             .if_simple,
@@ -489,6 +490,7 @@ const ZloppyChecks = struct {
                 self.popScope();
             },
             .switch_case_one,
+            .switch_case,
             .while_simple,
             .for_simple,
             .if_simple,
