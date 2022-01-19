@@ -326,7 +326,7 @@ fn fmtDir(
             } else {
                 std.debug.print(
                     "{s} updated ({} removed, {} added)\n",
-                    .{fullpath, result.comments_removed, result.comments_added },
+                    .{ fullpath, result.comments_removed, result.comments_added },
                 );
             }
         }

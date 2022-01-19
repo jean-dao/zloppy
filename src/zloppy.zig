@@ -17,7 +17,7 @@ pub const Patches = struct {
     const PatchIndex = u32;
     pub const Patch = union(enum) {
         unused_var: TokenIndex,
-        ignore_to_block_end: TokenIndex,
+        first_unreachable_stmt: TokenIndex,
     };
 
     map: std.AutoHashMap(TokenIndex, PatchIndex),
@@ -332,7 +332,7 @@ const ZloppyChecks = struct {
             }
 
             if (self.unreachable_from) |token| {
-                try patches.append(self.block_anchor, .{ .ignore_to_block_end = token });
+                try patches.append(self.block_anchor, .{ .first_unreachable_stmt = token });
             }
         }
 
@@ -359,9 +359,11 @@ const ZloppyChecks = struct {
         }
 
         fn setUsed(self: *Scope, tree: Tree, token: TokenIndex) bool {
-            // still return true, since we don't want to check parent scope
-            if (self.return_reached)
+            if (self.return_reached) {
+                // This expression is unreachable, ignore.
+                // Still return true, since we don't want to check parent scope
                 return true;
+            }
 
             const tag = tree.tokens.items(.tag)[token];
             std.debug.assert(tag == .identifier);
@@ -557,7 +559,7 @@ const ZloppyChecks = struct {
                 self.setUsed(tree, node_token);
             },
 
-            // indicate next statements in scope will unreachable
+            // indicate next statements in scope will be unreachable
             .@"return" => {
                 self.scope().markReturn();
             },
@@ -571,16 +573,6 @@ pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var patches = Patches.init(gpa);
     var checks = try ZloppyChecks.init(gpa);
     defer checks.deinit();
-
-    //std.debug.print("tokens:\n", .{});
-    //for (tree.tokens.items(.tag)) |tag, i| {
-    //    std.debug.print("[{}] {}\n", .{ i, tag });
-    //}
-
-    //std.debug.print("nodes:\n", .{});
-    //for (tree.nodes.items(.tag)) |tag, i| {
-    //    std.debug.print("[{}] {}\n", .{ i, tag });
-    //}
 
     for (tree.rootDecls()) |node| {
         try traverseNode(&checks, &patches, tree, node);

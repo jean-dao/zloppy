@@ -1672,7 +1672,7 @@ fn renderBlock(
                     }
                     try renderZloppyUnused(ais, tree, token);
                 },
-                .ignore_to_block_end => |token| {
+                .first_unreachable_stmt => |token| {
                     first_unreachable_stmt = token;
                 },
             }
