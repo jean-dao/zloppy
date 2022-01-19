@@ -234,7 +234,7 @@ const Dir = struct {
             switch (entry.kind) {
                 .Directory => {
                     if (std.mem.eql(u8, entry.name, "zig-cache")) {
-                        return null;
+                        continue;
                     } else {
                         return entry.name;
                     }
@@ -242,6 +242,8 @@ const Dir = struct {
                 else => {
                     if (std.mem.endsWith(u8, entry.name, ".zig")) {
                         return entry.name;
+                    } else {
+                        continue;
                     }
                 },
             }
