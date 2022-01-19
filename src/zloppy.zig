@@ -20,31 +20,28 @@ pub const Patches = struct {
         ignore_to_block_end: TokenIndex,
     };
 
-    token_map: std.AutoHashMap(TokenIndex, PatchIndex),
-    source_map: std.AutoHashMap(usize, PatchIndex),
+    map: std.AutoHashMap(TokenIndex, PatchIndex),
     patches: std.ArrayList(std.ArrayList(Patch)),
     rendered_comments: u32 = 0,
 
     pub fn init(gpa: mem.Allocator) Patches {
         return .{
-            .token_map = std.AutoHashMap(TokenIndex, PatchIndex).init(gpa),
-            .source_map = std.AutoHashMap(usize, PatchIndex).init(gpa),
+            .map = std.AutoHashMap(TokenIndex, PatchIndex).init(gpa),
             .patches = std.ArrayList(std.ArrayList(Patch)).init(gpa),
         };
     }
 
     pub fn deinit(self: *Patches) void {
-        self.token_map.deinit();
-        self.source_map.deinit();
+        self.map.deinit();
         for (self.patches.items) |patches| {
             patches.deinit();
         }
         self.patches.deinit();
     }
 
-    fn addAny(self: *Patches, map: anytype, key: anytype, patch: Patch) !void {
+    fn append(self: *Patches, token: TokenIndex, patch: Patch) !void {
         var patch_idx: PatchIndex = undefined;
-        const result = try map.getOrPut(key);
+        const result = try self.map.getOrPut(token);
         if (result.found_existing) {
             patch_idx = result.value_ptr.*;
         } else {
@@ -55,24 +52,8 @@ pub const Patches = struct {
         try self.patches.items[patch_idx].append(patch);
     }
 
-    fn addOnToken(self: *Patches, token: TokenIndex, patch: Patch) !void {
-        try self.addAny(&self.token_map, token, patch);
-    }
-
-    fn addOnSource(self: *Patches, src_idx: usize, patch: Patch) !void {
-        try self.addAny(&self.source_map, src_idx, patch);
-    }
-
-    pub fn getForToken(self: Patches, token: TokenIndex) ?[]const Patch {
-        if (self.token_map.get(token)) |patch_idx| {
-            return self.patches.items[patch_idx].items[0..];
-        } else {
-            return null;
-        }
-    }
-
-    pub fn getForSource(self: Patches, src_idx: usize) ?[]const Patch {
-        if (self.source_map.get(src_idx)) |patch_idx| {
+    pub fn get(self: Patches, token: TokenIndex) ?[]const Patch {
+        if (self.map.get(token)) |patch_idx| {
             return self.patches.items[patch_idx].items[0..];
         } else {
             return null;
@@ -346,12 +327,12 @@ const ZloppyChecks = struct {
         fn addPatches(self: Scope, patches: *Patches) !void {
             for (self.bindings.items) |binding| {
                 if (!binding.used) {
-                    try patches.addOnToken(binding.anchor, .{ .unused_var = binding.token });
+                    try patches.append(binding.anchor, .{ .unused_var = binding.token });
                 }
             }
 
             if (self.unreachable_from) |token| {
-                try patches.addOnToken(self.block_anchor, .{ .ignore_to_block_end = token });
+                try patches.append(self.block_anchor, .{ .ignore_to_block_end = token });
             }
         }
 

@@ -973,7 +973,7 @@ fn renderAsmInput(
 fn renderVarDecl(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.VarDecl) Error!void {
     try renderVarDeclInner(gpa, ais, tree, var_decl);
 
-    if (ais.patches.getForToken(var_decl.ast.mut_token)) |tok_patches| {
+    if (ais.patches.get(var_decl.ast.mut_token)) |tok_patches| {
         for (tok_patches) |patch| {
             switch (patch) {
                 .unused_var => |token| try renderZloppyUnused(ais, tree, token),
@@ -1634,7 +1634,7 @@ fn renderBlock(
 
     var first_unreachable_stmt: Ast.TokenIndex = 0;
     var lbrace_rendered = false;
-    if (ais.patches.getForToken(lbrace)) |tok_patches| {
+    if (ais.patches.get(lbrace)) |tok_patches| {
         for (tok_patches) |patch| {
             switch (patch) {
                 .unused_var => |token| {
