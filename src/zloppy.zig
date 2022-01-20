@@ -411,16 +411,9 @@ const ZloppyChecks = struct {
         };
 
         bindings: std.ArrayList(Binding),
-        state: union(enum) {
-            reachable_code,
-            return_reached,
-            unreachable_from: TokenIndex,
-        },
-
         fn init(gpa: mem.Allocator) Scope {
             return .{
                 .bindings = std.ArrayList(Binding).init(gpa),
-                .state = .reachable_code,
             };
         }
 
@@ -428,39 +421,19 @@ const ZloppyChecks = struct {
             self.bindings.deinit();
         }
 
-        fn addPatches(self: Scope, patches: *Patches, lbrace_anchor: TokenIndex) !void {
+        fn addPatches(self: Scope, patches: *Patches) !void {
             for (self.bindings.items) |binding| {
                 if (!binding.used) {
                     try patches.append(binding.anchor, .{ .unused_var = binding.token });
                 }
             }
-
-            switch (self.state) {
-                .unreachable_from => |token| {
-                    try patches.append(lbrace_anchor, .{ .first_unreachable_stmt = token });
-                },
-                else => {},
-            }
         }
 
         fn addBinding(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
-            std.debug.assert(self.state == .reachable_code);
             try self.bindings.append(.{ .token = token, .anchor = anchor });
         }
 
-        fn markReturn(self: *Scope) void {
-            std.debug.assert(self.state == .reachable_code);
-            self.state = .return_reached;
-        }
-
-        fn markUnreachableFrom(self: *Scope, tree: Tree, node: NodeIndex) void {
-            std.debug.assert(self.state == .return_reached);
-            self.state = .{ .unreachable_from = tree.nodes.items(.main_token)[node] };
-        }
-
         fn setUsed(self: *Scope, tree: Tree, token: TokenIndex) bool {
-            std.debug.assert(self.state == .reachable_code);
-
             const tag = tree.tokens.items(.tag)[token];
             std.debug.assert(tag == .identifier);
             const name = tree.tokenSlice(token);
@@ -478,10 +451,16 @@ const ZloppyChecks = struct {
     };
 
     scopes: std.ArrayList(Scope),
+    state: union(enum) {
+        reachable_code,
+        return_reached,
+        unreachable_from: TokenIndex,
+    },
 
     fn init(gpa: mem.Allocator) !ZloppyChecks {
         var self = ZloppyChecks{
             .scopes = std.ArrayList(Scope).init(gpa),
+            .state = .reachable_code,
         };
 
         try self.scopes.append(Scope.init(gpa));
@@ -507,6 +486,9 @@ const ZloppyChecks = struct {
         std.debug.assert(self.scopes.items.len > 1);
         self.scope().deinit();
         self.scopes.items.len -= 1;
+
+        // potentially faulty scope was popped, reset state to reachable
+        self.state = .reachable_code;
     }
 
     fn setUsed(self: *ZloppyChecks, tree: Tree, token: TokenIndex) void {
@@ -520,11 +502,11 @@ const ZloppyChecks = struct {
     fn before(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: NodeIndex) !bool {
         _ = patches;
 
-        switch (self.scope().state) {
+        switch (self.state) {
             .reachable_code => {},
             .return_reached => {
-                self.scope().markUnreachableFrom(tree, node);
                 // reached first unreachable statement, stop tree traversal
+                self.state = .{ .unreachable_from = tree.nodes.items(.main_token)[node] };
                 return false;
             },
             .unreachable_from => unreachable,
@@ -575,6 +557,17 @@ const ZloppyChecks = struct {
         return true;
     }
 
+    fn addPatches(self: *ZloppyChecks, patches: *Patches, anchor: TokenIndex) !void {
+        try self.scope().addPatches(patches);
+
+        switch (self.state) {
+            .unreachable_from => |token| {
+                try patches.append(anchor, .{ .first_unreachable_stmt = token });
+            },
+            else => {},
+        }
+    }
+
     fn after(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: Node.Index) !void {
         const node_data = tree.nodes.items(.data)[node];
         const node_token = tree.nodes.items(.main_token)[node];
@@ -586,7 +579,7 @@ const ZloppyChecks = struct {
             .block,
             .block_semicolon,
             => {
-                try self.scope().addPatches(patches, anchorFromNode(tree, node));
+                try self.addPatches(patches, anchorFromNode(tree, node));
                 self.popScope();
             },
             .switch_case_one,
@@ -599,10 +592,10 @@ const ZloppyChecks = struct {
                 const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.scope().addPatches(patches, anchorFromNode(tree, node));
+                    try self.addPatches(patches, anchorFromNode(tree, node));
                     self.popScope();
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.scope().addPatches(patches, anchorFromNode(tree, node));
+                    try self.addPatches(patches, anchorFromNode(tree, node));
                     self.popScope();
                 }
             },
@@ -659,7 +652,8 @@ const ZloppyChecks = struct {
 
             // indicate next statements in scope will be unreachable
             .@"return" => {
-                self.scope().markReturn();
+                std.debug.assert(self.state == .reachable_code);
+                self.state = .return_reached;
             },
 
             else => {},
