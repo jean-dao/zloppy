@@ -70,232 +70,279 @@ fn traverseNode(
     patches: *Patches,
     tree: Tree,
     node: NodeIndex,
-) TreeTraversalError!void {
-    try action.before(patches, tree, node);
+) TreeTraversalError!bool {
+    var cont = try action.before(patches, tree, node);
+    if (!cont)
+        return false;
 
     const datas = tree.nodes.items(.data);
     const tag = tree.nodes.items(.tag)[node];
-    switch (tag) {
-        // sub list from lhs to rhs
-        .block,
-        .block_semicolon,
-        .array_init_dot,
-        .array_init_dot_comma,
-        .struct_init_dot,
-        .struct_init_dot_comma,
-        .container_decl,
-        .container_decl_trailing,
-        => {
-            const first = datas[node].lhs;
-            const last = datas[node].rhs;
-            for (tree.extra_data[first..last]) |stmt_idx| {
-                try traverseNode(action, patches, tree, stmt_idx);
-            }
-        },
+    blk: {
+        switch (tag) {
+            // sub list from lhs to rhs
+            .block,
+            .block_semicolon,
+            .array_init_dot,
+            .array_init_dot_comma,
+            .struct_init_dot,
+            .struct_init_dot_comma,
+            .container_decl,
+            .container_decl_trailing,
+            => {
+                const first = datas[node].lhs;
+                const last = datas[node].rhs;
+                for (tree.extra_data[first..last]) |stmt_idx| {
+                    cont = try traverseNode(action, patches, tree, stmt_idx);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // check lhs (if set) and sub range list from rhs
-        .array_init,
-        .array_init_comma,
-        .struct_init,
-        .struct_init_comma,
-        .call,
-        .call_comma,
-        .async_call,
-        .async_call_comma,
-        .@"switch",
-        .switch_comma,
-        .container_decl_arg,
-        .container_decl_arg_trailing,
-        .tagged_union_enum_tag,
-        .tagged_union_enum_tag_trailing,
-        => {
-            if (datas[node].lhs != 0)
-                try traverseNode(action, patches, tree, datas[node].lhs);
-            const range = tree.extraData(datas[node].rhs, Node.SubRange);
-            for (tree.extra_data[range.start..range.end]) |idx| {
-                try traverseNode(action, patches, tree, idx);
-            }
-        },
+            // check lhs (if set) and sub range list from rhs
+            .array_init,
+            .array_init_comma,
+            .struct_init,
+            .struct_init_comma,
+            .call,
+            .call_comma,
+            .async_call,
+            .async_call_comma,
+            .@"switch",
+            .switch_comma,
+            .container_decl_arg,
+            .container_decl_arg_trailing,
+            .tagged_union_enum_tag,
+            .tagged_union_enum_tag_trailing,
+            => {
+                if (datas[node].lhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    if (!cont) break :blk;
+                }
+                const range = tree.extraData(datas[node].rhs, Node.SubRange);
+                for (tree.extra_data[range.start..range.end]) |idx| {
+                    cont = try traverseNode(action, patches, tree, idx);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // check sub range list from lhs and rhs (if set)
-        .switch_case => {
-            const range = tree.extraData(datas[node].lhs, Node.SubRange);
-            for (tree.extra_data[range.start..range.end]) |idx| {
-                try traverseNode(action, patches, tree, idx);
-            }
-            if (datas[node].rhs != 0)
-                try traverseNode(action, patches, tree, datas[node].rhs);
-        },
+            // check sub range list from lhs and rhs (if set)
+            .switch_case => {
+                const range = tree.extraData(datas[node].lhs, Node.SubRange);
+                for (tree.extra_data[range.start..range.end]) |idx| {
+                    cont = try traverseNode(action, patches, tree, idx);
+                    if (!cont) break :blk;
+                }
+                if (datas[node].rhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // both lhs and rhs must be checked (if set)
-        .@"catch",
-        .equal_equal,
-        .bang_equal,
-        .less_than,
-        .greater_than,
-        .less_or_equal,
-        .greater_or_equal,
-        .assign_mul,
-        .assign_div,
-        .assign_mod,
-        .assign_add,
-        .assign_sub,
-        .assign_shl,
-        .assign_shl_sat,
-        .assign_shr,
-        .assign_bit_and,
-        .assign_bit_xor,
-        .assign_bit_or,
-        .assign_mul_wrap,
-        .assign_add_wrap,
-        .assign_sub_wrap,
-        .assign_mul_sat,
-        .assign_add_sat,
-        .assign_sub_sat,
-        .assign,
-        .merge_error_sets,
-        .mul,
-        .div,
-        .mod,
-        .array_mult,
-        .mul_wrap,
-        .mul_sat,
-        .add,
-        .sub,
-        .array_cat,
-        .add_wrap,
-        .sub_wrap,
-        .add_sat,
-        .sub_sat,
-        .shl,
-        .shl_sat,
-        .shr,
-        .bit_and,
-        .bit_xor,
-        .bit_or,
-        .@"orelse",
-        .bool_and,
-        .bool_or,
-        .array_type,
-        .ptr_type_aligned,
-        .ptr_type_sentinel,
-        .slice_open,
-        .array_access,
-        .array_init_one,
-        .array_init_one_comma,
-        .array_init_dot_two,
-        .array_init_dot_two_comma,
-        .struct_init_one,
-        .struct_init_one_comma,
-        .struct_init_dot_two,
-        .struct_init_dot_two_comma,
-        .call_one,
-        .call_one_comma,
-        .async_call_one,
-        .async_call_one_comma,
-        .switch_case_one,
-        .switch_range,
-        .while_simple,
-        .for_simple,
-        .if_simple,
-        .fn_decl,
-        .builtin_call_two,
-        .builtin_call_two_comma,
-        .container_decl_two,
-        .container_decl_two_trailing,
-        .tagged_union_two,
-        .tagged_union_two_trailing,
-        .container_field_init,
-        .container_field_align,
-        .block_two,
-        .block_two_semicolon,
-        => {
-            if (datas[node].lhs != 0)
-                try traverseNode(action, patches, tree, datas[node].lhs);
-            if (datas[node].rhs != 0)
-                try traverseNode(action, patches, tree, datas[node].rhs);
-        },
+            // both lhs and rhs must be checked (if set)
+            .@"catch",
+            .equal_equal,
+            .bang_equal,
+            .less_than,
+            .greater_than,
+            .less_or_equal,
+            .greater_or_equal,
+            .assign_mul,
+            .assign_div,
+            .assign_mod,
+            .assign_add,
+            .assign_sub,
+            .assign_shl,
+            .assign_shl_sat,
+            .assign_shr,
+            .assign_bit_and,
+            .assign_bit_xor,
+            .assign_bit_or,
+            .assign_mul_wrap,
+            .assign_add_wrap,
+            .assign_sub_wrap,
+            .assign_mul_sat,
+            .assign_add_sat,
+            .assign_sub_sat,
+            .assign,
+            .merge_error_sets,
+            .mul,
+            .div,
+            .mod,
+            .array_mult,
+            .mul_wrap,
+            .mul_sat,
+            .add,
+            .sub,
+            .array_cat,
+            .add_wrap,
+            .sub_wrap,
+            .add_sat,
+            .sub_sat,
+            .shl,
+            .shl_sat,
+            .shr,
+            .bit_and,
+            .bit_xor,
+            .bit_or,
+            .@"orelse",
+            .bool_and,
+            .bool_or,
+            .array_type,
+            .ptr_type_aligned,
+            .ptr_type_sentinel,
+            .slice_open,
+            .array_access,
+            .array_init_one,
+            .array_init_one_comma,
+            .array_init_dot_two,
+            .array_init_dot_two_comma,
+            .struct_init_one,
+            .struct_init_one_comma,
+            .struct_init_dot_two,
+            .struct_init_dot_two_comma,
+            .call_one,
+            .call_one_comma,
+            .async_call_one,
+            .async_call_one_comma,
+            .switch_case_one,
+            .switch_range,
+            .while_simple,
+            .for_simple,
+            .if_simple,
+            .fn_decl,
+            .builtin_call_two,
+            .builtin_call_two_comma,
+            .container_decl_two,
+            .container_decl_two_trailing,
+            .tagged_union_two,
+            .tagged_union_two_trailing,
+            .container_field_init,
+            .container_field_align,
+            .block_two,
+            .block_two_semicolon,
+            => {
+                if (datas[node].lhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    if (!cont) break :blk;
+                }
+                if (datas[node].rhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // only lhs must be checked (if set)
-        .field_access,
-        .unwrap_optional,
-        .bool_not,
-        .negation,
-        .bit_not,
-        .negation_wrap,
-        .address_of,
-        .@"try",
-        .@"await",
-        .optional_type,
-        .deref,
-        .@"suspend",
-        .@"resume",
-        .@"return",
-        .grouped_expression,
-        => {
-            if (datas[node].lhs != 0)
-                try traverseNode(action, patches, tree, datas[node].lhs);
-        },
+            // only lhs must be checked (if set)
+            .field_access,
+            .unwrap_optional,
+            .bool_not,
+            .negation,
+            .bit_not,
+            .negation_wrap,
+            .address_of,
+            .@"try",
+            .@"await",
+            .optional_type,
+            .deref,
+            .@"suspend",
+            .@"resume",
+            .@"return",
+            .grouped_expression,
+            => {
+                if (datas[node].lhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // only rhs must be checked (if set)
-        .global_var_decl,
-        .local_var_decl,
-        .simple_var_decl,
-        .aligned_var_decl,
-        .test_decl,
-        .@"errdefer",
-        .@"defer",
-        .@"break",
-        => {
-            if (datas[node].rhs != 0)
-                try traverseNode(action, patches, tree, datas[node].rhs);
-        },
+            // only rhs must be checked (if set)
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            .test_decl,
+            .@"errdefer",
+            .@"defer",
+            .@"break",
+            => {
+                if (datas[node].rhs != 0) {
+                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // check lhs and 2 indices at rhs
-        .while_cont,
-        .@"if",
-        .slice,
-        .container_field,
-        => {
-            const TwoIndices = struct {
-                expr1: NodeIndex,
-                expr2: NodeIndex,
-            };
+            // check lhs and 2 indices at rhs
+            .while_cont,
+            .@"if",
+            .slice,
+            .container_field,
+            => {
+                const TwoIndices = struct {
+                    expr1: NodeIndex,
+                    expr2: NodeIndex,
+                };
 
-            try traverseNode(action, patches, tree, datas[node].lhs);
+                cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                if (!cont) break :blk;
 
-            const extra = tree.extraData(datas[node].rhs, TwoIndices);
-            if (extra.expr1 != 0)
-                try traverseNode(action, patches, tree, extra.expr1);
-            if (extra.expr2 != 0)
-                try traverseNode(action, patches, tree, extra.expr2);
-        },
+                const extra = tree.extraData(datas[node].rhs, TwoIndices);
+                if (extra.expr1 != 0) {
+                    cont = try traverseNode(action, patches, tree, extra.expr1);
+                    if (!cont) break :blk;
+                }
+                if (extra.expr2 != 0) {
+                    cont = try traverseNode(action, patches, tree, extra.expr2);
+                    if (!cont) break :blk;
+                }
+            },
 
-        // check lhs and 3 indices at rhs
-        .slice_sentinel,
-        .@"while",
-        => {
-            const ThreeIndices = struct {
-                expr1: NodeIndex,
-                expr2: NodeIndex,
-                expr3: NodeIndex,
-            };
+            // check lhs and 3 indices at rhs
+            .slice_sentinel,
+            .@"while",
+            => {
+                const ThreeIndices = struct {
+                    expr1: NodeIndex,
+                    expr2: NodeIndex,
+                    expr3: NodeIndex,
+                };
 
-            try traverseNode(action, patches, tree, datas[node].lhs);
+                cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                if (!cont) break :blk;
 
-            const extra = tree.extraData(datas[node].rhs, ThreeIndices);
-            if (extra.expr1 != 0)
-                try traverseNode(action, patches, tree, extra.expr1);
-            if (extra.expr2 != 0)
-                try traverseNode(action, patches, tree, extra.expr2);
-            if (extra.expr3 != 0)
-                try traverseNode(action, patches, tree, extra.expr3);
-        },
+                const extra = tree.extraData(datas[node].rhs, ThreeIndices);
+                if (extra.expr1 != 0) {
+                    cont = try traverseNode(action, patches, tree, extra.expr1);
+                    if (!cont) break :blk;
+                }
+                if (extra.expr2 != 0) {
+                    cont = try traverseNode(action, patches, tree, extra.expr2);
+                    if (!cont) break :blk;
+                }
+                if (extra.expr3 != 0) {
+                    cont = try traverseNode(action, patches, tree, extra.expr3);
+                    if (!cont) break :blk;
+                }
+            },
 
-        else => {},
+            else => {},
+        }
     }
 
     try action.after(patches, tree, node);
+
+    // do not propagate tree traversal skipping outside of blocks/structs
+    return switch (tag) {
+        .block_two,
+        .block_two_semicolon,
+        .block,
+        .block_semicolon,
+        .container_decl,
+        .container_decl_trailing,
+        .container_decl_arg,
+        .container_decl_arg_trailing,
+        => true,
+        else => cont,
+    };
+}
+
 }
 
 const ZloppyChecks = struct {
@@ -308,15 +355,17 @@ const ZloppyChecks = struct {
 
         bindings: std.ArrayList(Binding),
         block_anchor: TokenIndex,
-        return_reached: bool,
-        unreachable_from: ?TokenIndex,
+        state: union(enum) {
+            reachable_code,
+            return_reached,
+            unreachable_from: TokenIndex,
+        },
 
         fn init(gpa: mem.Allocator, block_anchor: TokenIndex) Scope {
             return .{
                 .bindings = std.ArrayList(Binding).init(gpa),
                 .block_anchor = block_anchor,
-                .return_reached = false,
-                .unreachable_from = null,
+                .state = .reachable_code,
             };
         }
 
@@ -331,39 +380,36 @@ const ZloppyChecks = struct {
                 }
             }
 
-            if (self.unreachable_from) |token| {
-                try patches.append(self.block_anchor, .{ .first_unreachable_stmt = token });
+            switch (self.state) {
+                .unreachable_from => |token| {
+                    try patches.append(self.block_anchor, .{ .first_unreachable_stmt = token });
+                },
+                else => {},
             }
         }
 
         fn addBinding(self: *Scope, token: TokenIndex) !void {
-            if (self.return_reached)
-                return;
+            std.debug.assert(self.state == .reachable_code);
             try self.bindings.append(.{ .token = token, .anchor = self.block_anchor });
         }
 
         fn addBindingWithAnchor(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
-            if (self.return_reached)
-                return;
+            std.debug.assert(self.state == .reachable_code);
             try self.bindings.append(.{ .token = token, .anchor = anchor });
         }
 
         fn markReturn(self: *Scope) void {
-            self.return_reached = true;
+            std.debug.assert(self.state == .reachable_code);
+            self.state = .return_reached;
         }
 
         fn markUnreachableFrom(self: *Scope, tree: Tree, node: NodeIndex) void {
-            if (self.unreachable_from == null) {
-                self.unreachable_from = tree.nodes.items(.main_token)[node];
-            }
+            std.debug.assert(self.state == .return_reached);
+            self.state = .{ .unreachable_from = tree.nodes.items(.main_token)[node] };
         }
 
         fn setUsed(self: *Scope, tree: Tree, token: TokenIndex) bool {
-            if (self.return_reached) {
-                // This expression is unreachable, ignore.
-                // Still return true, since we don't want to check parent scope
-                return true;
-            }
+            std.debug.assert(self.state == .reachable_code);
 
             const tag = tree.tokens.items(.tag)[token];
             std.debug.assert(tag == .identifier);
@@ -421,11 +467,17 @@ const ZloppyChecks = struct {
         }
     }
 
-    fn before(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: NodeIndex) !void {
+    fn before(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: NodeIndex) !bool {
         _ = patches;
 
-        if (self.scope().return_reached) {
-            self.scope().markUnreachableFrom(tree, node);
+        switch (self.scope().state) {
+            .reachable_code => {},
+            .return_reached => {
+                self.scope().markUnreachableFrom(tree, node);
+                // reached first unreachable statement, stop tree traversal
+                return false;
+            },
+            .unreachable_from => unreachable,
         }
 
         switch (tree.nodes.items(.tag)[node]) {
@@ -475,6 +527,9 @@ const ZloppyChecks = struct {
             },
             else => {},
         }
+
+        // continue tree traversal
+        return true;
     }
 
     fn after(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: Node.Index) !void {
@@ -575,7 +630,8 @@ pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     defer checks.deinit();
 
     for (tree.rootDecls()) |node| {
-        try traverseNode(&checks, &patches, tree, node);
+        if (!try traverseNode(&checks, &patches, tree, node))
+            break;
     }
 
     // return without checking unused variables in top-level scope (not needed)

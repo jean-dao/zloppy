@@ -986,6 +986,80 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    {
+            \\        _ = 42;
+            \\    }
+            \\    const baz = 0;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\    {
+            \\        _ = 42;
+            \\    }
+            \\    const baz = 0;
+            \\    _ = baz; // XXX ZLOPPY unused var baz
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    {
+            \\        _ = 42;
+            \\    }
+            \\    return;
+            \\    _ = "unreachable";
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\    {
+            \\        _ = 42;
+            \\    }
+            \\    return;
+            \\    //_ = "unreachable"; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    {
+            \\        return;
+            \\        //_ = "unreachable"; // XXX ZLOPPY unreachable code
+            \\    }
+            \\    const bar = "unused";
+            \\}
+            \\
+            \\fn bar(quux: bool) void {}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    {
+            \\        return;
+            \\        //_ = "unreachable"; // XXX ZLOPPY unreachable code
+            \\    }
+            \\    const bar = "unused";
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\}
+            \\
+            \\fn bar(quux: bool) void {
+            \\    _ = quux; // XXX ZLOPPY unused var quux
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
