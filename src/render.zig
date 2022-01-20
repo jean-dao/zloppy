@@ -1660,6 +1660,7 @@ fn renderBlock(
 
     ais.pushIndentNextLine();
 
+    // check lbrace anchor for patches
     var first_unreachable_stmt: Ast.TokenIndex = 0;
     var lbrace_rendered = false;
     if (ais.patches.get(lbrace)) |tok_patches| {

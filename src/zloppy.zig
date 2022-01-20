@@ -16,10 +16,17 @@ comptime {
 pub const Patches = struct {
     const PatchIndex = u32;
     pub const Patch = union(enum) {
+        // function parameters: anchored on block main token (lbrace)
+        // captures: if block exists, anchored on block main token (lbrace)
+        // if not, anchored on statement main token
+        // declarations: anchored on decl main token (`var` or `const`)
         unused_var: TokenIndex,
+
+        // anchored on block main token (lbrace)
         first_unreachable_stmt: TokenIndex,
     };
 
+    // mapping between anchors and patchsets
     map: std.AutoHashMap(TokenIndex, PatchIndex),
     patches: std.ArrayList(std.ArrayList(Patch)),
     rendered_comments: u32 = 0,
@@ -343,6 +350,56 @@ fn traverseNode(
     };
 }
 
+fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
+    const tag = tree.nodes.items(.tag)[node];
+    switch (tag) {
+        .switch_case_one,
+        .switch_case,
+        .while_simple,
+        .for_simple,
+        .if_simple,
+        => {
+            const rhs = tree.nodes.items(.data)[node].rhs;
+            const maybe_lbrace = tree.firstToken(rhs);
+            if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace) {
+                return maybe_lbrace;
+            } else {
+                return tree.nodes.items(.main_token)[rhs];
+            }
+        },
+
+        .fn_proto_simple,
+        .fn_proto_multi,
+        .fn_proto_one,
+        .fn_proto,
+        => {
+            const maybe_lbrace = tree.lastToken(node) + 1;
+            if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace) {
+                return maybe_lbrace;
+            } else {
+                return tree.nodes.items(.main_token)[node];
+            }
+        },
+
+        .fn_decl => {
+            const rhs = tree.nodes.items(.data)[node].rhs;
+            const lbrace = tree.firstToken(rhs);
+            std.debug.assert(tree.tokens.items(.tag)[lbrace] == .l_brace);
+            return lbrace;
+        },
+
+        .block_two,
+        .block_two_semicolon,
+        .block,
+        .block_semicolon,
+        .global_var_decl,
+        .local_var_decl,
+        .simple_var_decl,
+        .aligned_var_decl,
+        => return tree.nodes.items(.main_token)[node],
+
+        else => unreachable,
+    }
 }
 
 const ZloppyChecks = struct {
@@ -354,17 +411,15 @@ const ZloppyChecks = struct {
         };
 
         bindings: std.ArrayList(Binding),
-        block_anchor: TokenIndex,
         state: union(enum) {
             reachable_code,
             return_reached,
             unreachable_from: TokenIndex,
         },
 
-        fn init(gpa: mem.Allocator, block_anchor: TokenIndex) Scope {
+        fn init(gpa: mem.Allocator) Scope {
             return .{
                 .bindings = std.ArrayList(Binding).init(gpa),
-                .block_anchor = block_anchor,
                 .state = .reachable_code,
             };
         }
@@ -373,7 +428,7 @@ const ZloppyChecks = struct {
             self.bindings.deinit();
         }
 
-        fn addPatches(self: Scope, patches: *Patches) !void {
+        fn addPatches(self: Scope, patches: *Patches, lbrace_anchor: TokenIndex) !void {
             for (self.bindings.items) |binding| {
                 if (!binding.used) {
                     try patches.append(binding.anchor, .{ .unused_var = binding.token });
@@ -382,18 +437,13 @@ const ZloppyChecks = struct {
 
             switch (self.state) {
                 .unreachable_from => |token| {
-                    try patches.append(self.block_anchor, .{ .first_unreachable_stmt = token });
+                    try patches.append(lbrace_anchor, .{ .first_unreachable_stmt = token });
                 },
                 else => {},
             }
         }
 
-        fn addBinding(self: *Scope, token: TokenIndex) !void {
-            std.debug.assert(self.state == .reachable_code);
-            try self.bindings.append(.{ .token = token, .anchor = self.block_anchor });
-        }
-
-        fn addBindingWithAnchor(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
+        fn addBinding(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
             std.debug.assert(self.state == .reachable_code);
             try self.bindings.append(.{ .token = token, .anchor = anchor });
         }
@@ -434,7 +484,7 @@ const ZloppyChecks = struct {
             .scopes = std.ArrayList(Scope).init(gpa),
         };
 
-        try self.scopes.append(Scope.init(gpa, 0));
+        try self.scopes.append(Scope.init(gpa));
         return self;
     }
 
@@ -449,8 +499,8 @@ const ZloppyChecks = struct {
         return &self.scopes.items[self.scopes.items.len - 1];
     }
 
-    fn pushScope(self: *ZloppyChecks, block_anchor: TokenIndex) !void {
-        try self.scopes.append(Scope.init(self.scopes.allocator, block_anchor));
+    fn pushScope(self: *ZloppyChecks) !void {
+        try self.scopes.append(Scope.init(self.scopes.allocator));
     }
 
     fn popScope(self: *ZloppyChecks) void {
@@ -482,25 +532,19 @@ const ZloppyChecks = struct {
 
         switch (tree.nodes.items(.tag)[node]) {
             // create a new scope for fn decls, blocks, containers
-            .fn_decl => {
-                const body = tree.nodes.items(.data)[node].rhs;
-                try self.pushScope(tree.nodes.items(.main_token)[body]);
-            },
+            .fn_decl,
             .container_decl,
             .container_decl_trailing,
             .container_decl_two,
             .container_decl_two_trailing,
             .container_decl_arg,
             .container_decl_arg_trailing,
-            => {
-                try self.pushScope(tree.nodes.items(.main_token)[node]);
-            },
             .block_two,
             .block_two_semicolon,
             .block,
             .block_semicolon,
             => {
-                try self.pushScope(tree.nodes.items(.main_token)[node]);
+                try self.pushScope();
             },
 
             // create a new scope for single statement (no block) if/for/while body
@@ -515,14 +559,13 @@ const ZloppyChecks = struct {
                 const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    const anchor = tree.nodes.items(.main_token)[rhs];
-                    try self.pushScope(anchor);
+                    try self.pushScope();
 
                     const capture = maybe_capture - 1;
                     std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
-                    try self.scope().addBinding(capture);
+                    try self.scope().addBinding(capture, anchorFromNode(tree, node));
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.pushScope(0);
+                    try self.pushScope();
                 }
             },
             else => {},
@@ -543,7 +586,7 @@ const ZloppyChecks = struct {
             .block,
             .block_semicolon,
             => {
-                try self.scope().addPatches(patches);
+                try self.scope().addPatches(patches, anchorFromNode(tree, node));
                 self.popScope();
             },
             .switch_case_one,
@@ -556,10 +599,10 @@ const ZloppyChecks = struct {
                 const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.scope().addPatches(patches);
+                    try self.scope().addPatches(patches, anchorFromNode(tree, node));
                     self.popScope();
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.scope().addPatches(patches);
+                    try self.scope().addPatches(patches, anchorFromNode(tree, node));
                     self.popScope();
                 }
             },
@@ -578,34 +621,34 @@ const ZloppyChecks = struct {
             // update current scope for var decls and fn param decls
             .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => {
                 const name = node_token + 1;
-                try self.scope().addBindingWithAnchor(name, node_token);
+                try self.scope().addBinding(name, anchorFromNode(tree, node));
             },
             .fn_proto_simple => {
                 var param = node_token + 3;
                 if (tree.tokens.items(.tag)[param] == .keyword_comptime)
                     param += 1;
                 if (tree.tokens.items(.tag)[param] == .identifier)
-                    try self.scope().addBinding(param);
+                    try self.scope().addBinding(param, anchorFromNode(tree, node));
             },
             .fn_proto_multi => {
                 const params_range = tree.extraData(node_data.lhs, Node.SubRange);
                 for (tree.extra_data[params_range.start..params_range.end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.scope().addBinding(param);
+                    try self.scope().addBinding(param, anchorFromNode(tree, node));
                 }
             },
             .fn_proto_one => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProtoOne);
                 if (extra.param != 0) {
                     const param = tree.firstToken(extra.param) - 2;
-                    try self.scope().addBinding(param);
+                    try self.scope().addBinding(param, anchorFromNode(tree, node));
                 }
             },
             .fn_proto => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProto);
                 for (tree.extra_data[extra.params_start..extra.params_end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.scope().addBinding(param);
+                    try self.scope().addBinding(param, anchorFromNode(tree, node));
                 }
             },
 
