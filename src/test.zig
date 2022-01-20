@@ -350,8 +350,8 @@ const test_cases_on = [_]TestCase{
         ,
         .expected =
             \\fn foo(bar: bool, baz: bool, quux: bool) void {
-            \\    _ = bar; // XXX ZLOPPY unused var bar
             \\    _ = baz; // XXX ZLOPPY unused var baz
+            \\    _ = bar; // XXX ZLOPPY unused var bar
             \\    std.debug.print("quux={}\n", .{quux});
             \\}
             \\
@@ -366,9 +366,9 @@ const test_cases_on = [_]TestCase{
         ,
         .expected =
             \\fn foo(un: bool, deux: bool, trois: bool, quatre: bool) void {
-            \\    _ = un; // XXX ZLOPPY unused var un
-            \\    _ = deux; // XXX ZLOPPY unused var deux
             \\    _ = trois; // XXX ZLOPPY unused var trois
+            \\    _ = deux; // XXX ZLOPPY unused var deux
+            \\    _ = un; // XXX ZLOPPY unused var un
             \\    std.debug.print("quatre={}\n", .{quatre});
             \\}
             \\
@@ -383,10 +383,10 @@ const test_cases_on = [_]TestCase{
         ,
         .expected =
             \\fn foo(un: bool, deux: bool, trois: bool, quatre: bool, cinq: bool) void {
-            \\    _ = un; // XXX ZLOPPY unused var un
-            \\    _ = deux; // XXX ZLOPPY unused var deux
-            \\    _ = trois; // XXX ZLOPPY unused var trois
             \\    _ = cinq; // XXX ZLOPPY unused var cinq
+            \\    _ = trois; // XXX ZLOPPY unused var trois
+            \\    _ = deux; // XXX ZLOPPY unused var deux
+            \\    _ = un; // XXX ZLOPPY unused var un
             \\    std.debug.print("quatre={}\n", .{quatre});
             \\}
             \\
@@ -413,8 +413,8 @@ const test_cases_on = [_]TestCase{
         ,
         .expected =
             \\fn foo(bar: bool, baz: bool) callconv(.C) void {
-            \\    _ = bar; // XXX ZLOPPY unused var bar
             \\    _ = baz; // XXX ZLOPPY unused var baz
+            \\    _ = bar; // XXX ZLOPPY unused var bar
             \\}
             \\
         ,

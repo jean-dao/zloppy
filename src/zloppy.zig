@@ -403,54 +403,14 @@ fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
 }
 
 const ZloppyChecks = struct {
-    const Scope = struct {
-        const Binding = struct {
-            token: TokenIndex,
-            anchor: TokenIndex,
-            used: bool = false,
-        };
-
-        bindings: std.ArrayList(Binding),
-        fn init(gpa: mem.Allocator) Scope {
-            return .{
-                .bindings = std.ArrayList(Binding).init(gpa),
-            };
-        }
-
-        fn deinit(self: Scope) void {
-            self.bindings.deinit();
-        }
-
-        fn addPatches(self: Scope, patches: *Patches) !void {
-            for (self.bindings.items) |binding| {
-                if (!binding.used) {
-                    try patches.append(binding.anchor, .{ .unused_var = binding.token });
-                }
-            }
-        }
-
-        fn addBinding(self: *Scope, token: TokenIndex, anchor: TokenIndex) !void {
-            try self.bindings.append(.{ .token = token, .anchor = anchor });
-        }
-
-        fn setUsed(self: *Scope, tree: Tree, token: TokenIndex) bool {
-            const tag = tree.tokens.items(.tag)[token];
-            std.debug.assert(tag == .identifier);
-            const name = tree.tokenSlice(token);
-
-            for (self.bindings.items) |*binding| {
-                const bname = tree.tokenSlice(binding.token);
-                if (mem.eql(u8, name, bname)) {
-                    binding.used = true;
-                    return true;
-                }
-            }
-
-            return false;
-        }
+    const Binding = struct {
+        token: TokenIndex = 0,
+        anchor: TokenIndex = 0,
+        used: bool = false,
+        scope_marker: bool = false,
     };
 
-    scopes: std.ArrayList(Scope),
+    bindings: std.ArrayList(Binding),
     state: union(enum) {
         reachable_code,
         return_reached,
@@ -459,43 +419,78 @@ const ZloppyChecks = struct {
 
     fn init(gpa: mem.Allocator) !ZloppyChecks {
         var self = ZloppyChecks{
-            .scopes = std.ArrayList(Scope).init(gpa),
+            .bindings = std.ArrayList(Binding).init(gpa),
             .state = .reachable_code,
         };
 
-        try self.scopes.append(Scope.init(gpa));
+        try self.pushScope();
         return self;
     }
 
     fn deinit(self: *ZloppyChecks) void {
-        std.debug.assert(self.scopes.items.len == 1);
-        self.scopes.items[0].deinit();
-        self.scopes.deinit();
-    }
-
-    fn scope(self: *ZloppyChecks) *Scope {
-        std.debug.assert(self.scopes.items.len > 0);
-        return &self.scopes.items[self.scopes.items.len - 1];
+        std.debug.assert(self.bindings.items.len == 1);
+        self.bindings.deinit();
     }
 
     fn pushScope(self: *ZloppyChecks) !void {
-        try self.scopes.append(Scope.init(self.scopes.allocator));
+        try self.bindings.append(.{ .scope_marker = true });
     }
 
     fn popScope(self: *ZloppyChecks) void {
-        std.debug.assert(self.scopes.items.len > 1);
-        self.scope().deinit();
-        self.scopes.items.len -= 1;
+        var i: usize = self.bindings.items.len;
+        while (i > 0 and !self.bindings.items[i - 1].scope_marker) : (i -= 1) {}
+        self.bindings.items.len = i - 1;
 
         // potentially faulty scope was popped, reset state to reachable
         self.state = .reachable_code;
     }
 
+    fn popScopeGenPatches(self: *ZloppyChecks, patches: *Patches, anchor: TokenIndex) !void {
+        // unused vars
+        var i: usize = self.bindings.items.len;
+        while (i > 0 and !self.bindings.items[i - 1].scope_marker) : (i -= 1) {
+            const binding = self.bindings.items[i - 1];
+            if (!binding.used) {
+                try patches.append(binding.anchor, .{ .unused_var = binding.token });
+            }
+        }
+        self.bindings.items.len = i - 1;
+
+        // unreachable code
+        switch (self.state) {
+            .unreachable_from => |token| {
+                try patches.append(anchor, .{ .first_unreachable_stmt = token });
+            },
+            else => {},
+        }
+
+        // potentially faulty scope was popped, reset state to reachable
+        self.state = .reachable_code;
+    }
+
+    fn addBinding(self: *ZloppyChecks, token: TokenIndex, anchor: TokenIndex) !void {
+        try self.bindings.append(.{ .token = token, .anchor = anchor });
+    }
+
     fn setUsed(self: *ZloppyChecks, tree: Tree, token: TokenIndex) void {
-        var i: usize = self.scopes.items.len;
-        while (i > 0) : (i -= 1) {
-            if (self.scopes.items[i - 1].setUsed(tree, token))
+        std.debug.assert(self.state == .reachable_code);
+
+        const tag = tree.tokens.items(.tag)[token];
+        const name = tree.tokenSlice(token);
+        std.debug.assert(tag == .identifier);
+
+        // no need to check bindings[0], it's the first scope marker
+        var i: usize = self.bindings.items.len - 1;
+        while (i > 1) : (i -= 1) {
+            var binding = &self.bindings.items[i];
+            if (binding.scope_marker)
+                continue;
+
+            const bname = tree.tokenSlice(binding.token);
+            if (mem.eql(u8, name, bname)) {
+                binding.used = true;
                 return;
+            }
         }
     }
 
@@ -545,7 +540,7 @@ const ZloppyChecks = struct {
 
                     const capture = maybe_capture - 1;
                     std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
-                    try self.scope().addBinding(capture, anchorFromNode(tree, node));
+                    try self.addBinding(capture, anchorFromNode(tree, node));
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
                     try self.pushScope();
                 }
@@ -555,17 +550,6 @@ const ZloppyChecks = struct {
 
         // continue tree traversal
         return true;
-    }
-
-    fn addPatches(self: *ZloppyChecks, patches: *Patches, anchor: TokenIndex) !void {
-        try self.scope().addPatches(patches);
-
-        switch (self.state) {
-            .unreachable_from => |token| {
-                try patches.append(anchor, .{ .first_unreachable_stmt = token });
-            },
-            else => {},
-        }
     }
 
     fn after(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: Node.Index) !void {
@@ -579,8 +563,7 @@ const ZloppyChecks = struct {
             .block,
             .block_semicolon,
             => {
-                try self.addPatches(patches, anchorFromNode(tree, node));
-                self.popScope();
+                try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
             },
             .switch_case_one,
             .switch_case,
@@ -592,11 +575,9 @@ const ZloppyChecks = struct {
                 const maybe_lbrace = tree.firstToken(rhs);
                 const maybe_capture = tree.firstToken(rhs) - 1;
                 if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.addPatches(patches, anchorFromNode(tree, node));
-                    self.popScope();
+                    try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.addPatches(patches, anchorFromNode(tree, node));
-                    self.popScope();
+                    try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
                 }
             },
 
@@ -614,34 +595,34 @@ const ZloppyChecks = struct {
             // update current scope for var decls and fn param decls
             .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => {
                 const name = node_token + 1;
-                try self.scope().addBinding(name, anchorFromNode(tree, node));
+                try self.addBinding(name, anchorFromNode(tree, node));
             },
             .fn_proto_simple => {
                 var param = node_token + 3;
                 if (tree.tokens.items(.tag)[param] == .keyword_comptime)
                     param += 1;
                 if (tree.tokens.items(.tag)[param] == .identifier)
-                    try self.scope().addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(param, anchorFromNode(tree, node));
             },
             .fn_proto_multi => {
                 const params_range = tree.extraData(node_data.lhs, Node.SubRange);
                 for (tree.extra_data[params_range.start..params_range.end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.scope().addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(param, anchorFromNode(tree, node));
                 }
             },
             .fn_proto_one => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProtoOne);
                 if (extra.param != 0) {
                     const param = tree.firstToken(extra.param) - 2;
-                    try self.scope().addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(param, anchorFromNode(tree, node));
                 }
             },
             .fn_proto => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProto);
                 for (tree.extra_data[extra.params_start..extra.params_end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.scope().addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(param, anchorFromNode(tree, node));
                 }
             },
 
