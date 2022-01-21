@@ -76,9 +76,10 @@ fn traverseNode(
     action: anytype,
     patches: *Patches,
     tree: Tree,
+    parent: NodeIndex,
     node: NodeIndex,
 ) TreeTraversalError!bool {
-    var cont = try action.before(patches, tree, node);
+    var cont = try action.before(patches, tree, parent, node);
     if (!cont)
         return false;
 
@@ -99,7 +100,7 @@ fn traverseNode(
                 const first = datas[node].lhs;
                 const last = datas[node].rhs;
                 for (tree.extra_data[first..last]) |stmt_idx| {
-                    cont = try traverseNode(action, patches, tree, stmt_idx);
+                    cont = try traverseNode(action, patches, tree, node, stmt_idx);
                     if (!cont) break :blk;
                 }
             },
@@ -121,12 +122,12 @@ fn traverseNode(
             .tagged_union_enum_tag_trailing,
             => {
                 if (datas[node].lhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                     if (!cont) break :blk;
                 }
                 const range = tree.extraData(datas[node].rhs, Node.SubRange);
                 for (tree.extra_data[range.start..range.end]) |idx| {
-                    cont = try traverseNode(action, patches, tree, idx);
+                    cont = try traverseNode(action, patches, tree, node, idx);
                     if (!cont) break :blk;
                 }
             },
@@ -135,11 +136,11 @@ fn traverseNode(
             .switch_case => {
                 const range = tree.extraData(datas[node].lhs, Node.SubRange);
                 for (tree.extra_data[range.start..range.end]) |idx| {
-                    cont = try traverseNode(action, patches, tree, idx);
+                    cont = try traverseNode(action, patches, tree, node, idx);
                     if (!cont) break :blk;
                 }
                 if (datas[node].rhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                     if (!cont) break :blk;
                 }
             },
@@ -228,11 +229,11 @@ fn traverseNode(
             .block_two_semicolon,
             => {
                 if (datas[node].lhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                     if (!cont) break :blk;
                 }
                 if (datas[node].rhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                     if (!cont) break :blk;
                 }
             },
@@ -255,7 +256,7 @@ fn traverseNode(
             .grouped_expression,
             => {
                 if (datas[node].lhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                     if (!cont) break :blk;
                 }
             },
@@ -271,7 +272,7 @@ fn traverseNode(
             .@"break",
             => {
                 if (datas[node].rhs != 0) {
-                    cont = try traverseNode(action, patches, tree, datas[node].rhs);
+                    cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                     if (!cont) break :blk;
                 }
             },
@@ -279,6 +280,7 @@ fn traverseNode(
             // check lhs and 2 indices at rhs
             .while_cont,
             .@"if",
+            .@"for",
             .slice,
             .container_field,
             => {
@@ -287,16 +289,16 @@ fn traverseNode(
                     expr2: NodeIndex,
                 };
 
-                cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
                 const extra = tree.extraData(datas[node].rhs, TwoIndices);
                 if (extra.expr1 != 0) {
-                    cont = try traverseNode(action, patches, tree, extra.expr1);
+                    cont = try traverseNode(action, patches, tree, node, extra.expr1);
                     if (!cont) break :blk;
                 }
                 if (extra.expr2 != 0) {
-                    cont = try traverseNode(action, patches, tree, extra.expr2);
+                    cont = try traverseNode(action, patches, tree, node, extra.expr2);
                     if (!cont) break :blk;
                 }
             },
@@ -311,20 +313,20 @@ fn traverseNode(
                     expr3: NodeIndex,
                 };
 
-                cont = try traverseNode(action, patches, tree, datas[node].lhs);
+                cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
                 const extra = tree.extraData(datas[node].rhs, ThreeIndices);
                 if (extra.expr1 != 0) {
-                    cont = try traverseNode(action, patches, tree, extra.expr1);
+                    cont = try traverseNode(action, patches, tree, node, extra.expr1);
                     if (!cont) break :blk;
                 }
                 if (extra.expr2 != 0) {
-                    cont = try traverseNode(action, patches, tree, extra.expr2);
+                    cont = try traverseNode(action, patches, tree, node, extra.expr2);
                     if (!cont) break :blk;
                 }
                 if (extra.expr3 != 0) {
-                    cont = try traverseNode(action, patches, tree, extra.expr3);
+                    cont = try traverseNode(action, patches, tree, node, extra.expr3);
                     if (!cont) break :blk;
                 }
             },
@@ -333,7 +335,7 @@ fn traverseNode(
         }
     }
 
-    try action.after(patches, tree, node);
+    try action.after(patches, tree, parent, node);
 
     // do not propagate tree traversal skipping outside of blocks/structs
     return switch (tag) {
@@ -353,23 +355,6 @@ fn traverseNode(
 fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
     const tag = tree.nodes.items(.tag)[node];
     switch (tag) {
-        .@"catch",
-        .@"orelse",
-        .switch_case_one,
-        .switch_case,
-        .while_simple,
-        .for_simple,
-        .if_simple,
-        => {
-            const rhs = tree.nodes.items(.data)[node].rhs;
-            const maybe_lbrace = tree.firstToken(rhs);
-            if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace) {
-                return maybe_lbrace;
-            } else {
-                return tree.nodes.items(.main_token)[rhs];
-            }
-        },
-
         .fn_proto_simple,
         .fn_proto_multi,
         .fn_proto_one,
@@ -390,17 +375,7 @@ fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
             return lbrace;
         },
 
-        .block_two,
-        .block_two_semicolon,
-        .block,
-        .block_semicolon,
-        .global_var_decl,
-        .local_var_decl,
-        .simple_var_decl,
-        .aligned_var_decl,
-        => return tree.nodes.items(.main_token)[node],
-
-        else => unreachable,
+        else => return tree.nodes.items(.main_token)[node],
     }
 }
 
@@ -441,6 +416,17 @@ const ZloppyChecks = struct {
 
     fn pushScope(self: *ZloppyChecks) !void {
         try self.bindings.append(.{ .scope_marker = true });
+    }
+
+    fn pushScopeWithCapture(self: *ZloppyChecks, tree: Tree, node: NodeIndex) !void {
+        try self.pushScope();
+
+        const maybe_capture = tree.firstToken(node) - 1;
+        if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
+            const capture = maybe_capture - 1;
+            std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
+            try self.addBinding(tree, node, capture);
+        }
     }
 
     fn popScope(self: *ZloppyChecks) void {
@@ -506,7 +492,13 @@ const ZloppyChecks = struct {
         }
     }
 
-    fn before(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: NodeIndex) !bool {
+    fn before(
+        self: *ZloppyChecks,
+        patches: *Patches,
+        tree: Tree,
+        parent: NodeIndex,
+        node: NodeIndex,
+    ) !bool {
         _ = patches;
 
         switch (self.state) {
@@ -519,8 +511,36 @@ const ZloppyChecks = struct {
             .unreachable_from => unreachable,
         }
 
+        // Check parent to know if we should push a new scope and possibly add
+        // a capture. In some cases we cannot tell if a new scope should be
+        // pushed only from the node itself (e.g. for single-statement blocks).
+        // Captures are not part of the Ast, so they must be added here.
+        switch (tree.nodes.items(.tag)[parent]) {
+            .@"catch",
+            .@"orelse",
+            .switch_case_one,
+            .switch_case,
+            .while_simple,
+            .while_cont,
+            .@"while",
+            .for_simple,
+            .@"for",
+            .if_simple,
+            .@"if",
+            => {
+                // lhs is the condition, nothing special to do
+                const lhs = tree.nodes.items(.data)[parent].lhs;
+                if (node != lhs) {
+                    try self.pushScopeWithCapture(tree, node);
+                    return true;
+                }
+            },
+
+            else => {},
+        }
+
+        // normal case: create a new scope for fn decls, blocks and containers
         switch (tree.nodes.items(.tag)[node]) {
-            // create a new scope for fn decls, blocks, containers
             .fn_decl,
             .container_decl,
             .container_decl_trailing,
@@ -536,30 +556,6 @@ const ZloppyChecks = struct {
                 try self.pushScope();
             },
 
-            // create a new scope for single statement (no block) if/for/while body
-            // create a new scope for catch and orelse body
-            // create a new scope and add the capture binding for captures
-            .@"catch",
-            .@"orelse",
-            .switch_case_one,
-            .switch_case,
-            .while_simple,
-            .for_simple,
-            .if_simple,
-            => {
-                const rhs = tree.nodes.items(.data)[node].rhs;
-                const maybe_lbrace = tree.firstToken(rhs);
-                const maybe_capture = tree.firstToken(rhs) - 1;
-                if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.pushScope();
-
-                    const capture = maybe_capture - 1;
-                    std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
-                    try self.addBinding(tree, node, capture);
-                } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.pushScope();
-                }
-            },
             else => {},
         }
 
@@ -567,11 +563,17 @@ const ZloppyChecks = struct {
         return true;
     }
 
-    fn after(self: *ZloppyChecks, patches: *Patches, tree: Tree, node: Node.Index) !void {
+    fn after(
+        self: *ZloppyChecks,
+        patches: *Patches,
+        tree: Tree,
+        parent: NodeIndex,
+        node: NodeIndex,
+    ) !void {
         const node_data = tree.nodes.items(.data)[node];
         const node_token = tree.nodes.items(.main_token)[node];
         switch (tree.nodes.items(.tag)[node]) {
-            // check unused variable in current fn_decls, blocks, captures
+            // check unused variable in current fn_decls, blocks
             .fn_decl,
             .block_two,
             .block_two_semicolon,
@@ -579,23 +581,7 @@ const ZloppyChecks = struct {
             .block_semicolon,
             => {
                 try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
-            },
-            .@"catch",
-            .@"orelse",
-            .switch_case_one,
-            .switch_case,
-            .while_simple,
-            .for_simple,
-            .if_simple,
-            => {
-                const rhs = tree.nodes.items(.data)[node].rhs;
-                const maybe_lbrace = tree.firstToken(rhs);
-                const maybe_capture = tree.firstToken(rhs) - 1;
-                if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-                    try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
-                } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
-                    try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
-                }
+                return;
             },
 
             // only pop scope in containers, don't check for unused variables
@@ -607,6 +593,7 @@ const ZloppyChecks = struct {
             .container_decl_arg_trailing,
             => {
                 self.popScope();
+                return;
             },
 
             // update current scope for var decls and fn param decls
@@ -656,6 +643,30 @@ const ZloppyChecks = struct {
 
             else => {},
         }
+
+        // scope pushed in before() must be popped on same conditions
+        switch (tree.nodes.items(.tag)[parent]) {
+            .@"catch",
+            .@"orelse",
+            .switch_case_one,
+            .switch_case,
+            .while_simple,
+            .while_cont,
+            .@"while",
+            .for_simple,
+            .@"for",
+            .if_simple,
+            .@"if",
+            => {
+                // lhs is the condition, nothing special to do
+                const lhs = tree.nodes.items(.data)[parent].lhs;
+                if (node != lhs) {
+                    try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
+                }
+            },
+
+            else => {},
+        }
     }
 };
 
@@ -665,7 +676,7 @@ pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     defer checks.deinit();
 
     for (tree.rootDecls()) |node| {
-        if (!try traverseNode(&checks, &patches, tree, node))
+        if (!try traverseNode(&checks, &patches, tree, 0, node))
             break;
     }
 
