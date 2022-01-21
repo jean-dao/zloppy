@@ -475,7 +475,12 @@ const ZloppyChecks = struct {
         self.state = .reachable_code;
     }
 
-    fn addBinding(self: *ZloppyChecks, token: TokenIndex, anchor: TokenIndex) !void {
+    fn addBinding(self: *ZloppyChecks, tree: Tree, node: NodeIndex, token: TokenIndex) !void {
+        // _ variable is ignored by compiler
+        if (mem.eql(u8, "_", tree.tokenSlice(token)))
+            return;
+
+        const anchor = anchorFromNode(tree, node);
         try self.bindings.append(.{ .token = token, .anchor = anchor });
     }
 
@@ -550,7 +555,7 @@ const ZloppyChecks = struct {
 
                     const capture = maybe_capture - 1;
                     std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
-                    try self.addBinding(capture, anchorFromNode(tree, node));
+                    try self.addBinding(tree, node, capture);
                 } else if (tree.tokens.items(.tag)[maybe_lbrace] != .l_brace) {
                     try self.pushScope();
                 }
@@ -607,34 +612,34 @@ const ZloppyChecks = struct {
             // update current scope for var decls and fn param decls
             .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => {
                 const name = node_token + 1;
-                try self.addBinding(name, anchorFromNode(tree, node));
+                try self.addBinding(tree, node, name);
             },
             .fn_proto_simple => {
                 var param = node_token + 3;
                 if (tree.tokens.items(.tag)[param] == .keyword_comptime)
                     param += 1;
                 if (tree.tokens.items(.tag)[param] == .identifier)
-                    try self.addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(tree, node, param);
             },
             .fn_proto_multi => {
                 const params_range = tree.extraData(node_data.lhs, Node.SubRange);
                 for (tree.extra_data[params_range.start..params_range.end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(tree, node, param);
                 }
             },
             .fn_proto_one => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProtoOne);
                 if (extra.param != 0) {
                     const param = tree.firstToken(extra.param) - 2;
-                    try self.addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(tree, node, param);
                 }
             },
             .fn_proto => {
                 const extra = tree.extraData(node_data.lhs, Node.FnProto);
                 for (tree.extra_data[extra.params_start..extra.params_end]) |param_idx| {
                     const param = tree.firstToken(param_idx) - 2;
-                    try self.addBinding(param, anchorFromNode(tree, node));
+                    try self.addBinding(tree, node, param);
                 }
             },
 

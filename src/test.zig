@@ -1092,6 +1092,16 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(_: bool) void {}
+            \\
+        ,
+        .expected =
+            \\fn foo(_: bool) void {}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
