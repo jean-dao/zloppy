@@ -353,6 +353,8 @@ fn traverseNode(
 fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
     const tag = tree.nodes.items(.tag)[node];
     switch (tag) {
+        .@"catch",
+        .@"orelse",
         .switch_case_one,
         .switch_case,
         .while_simple,
@@ -530,7 +532,10 @@ const ZloppyChecks = struct {
             },
 
             // create a new scope for single statement (no block) if/for/while body
+            // create a new scope for catch and orelse body
             // create a new scope and add the capture binding for captures
+            .@"catch",
+            .@"orelse",
             .switch_case_one,
             .switch_case,
             .while_simple,
@@ -570,6 +575,8 @@ const ZloppyChecks = struct {
             => {
                 try self.popScopeGenPatches(patches, anchorFromNode(tree, node));
             },
+            .@"catch",
+            .@"orelse",
             .switch_case_one,
             .switch_case,
             .while_simple,

@@ -1060,6 +1060,38 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    _ = 42 orelse return;
+            \\    _ = "reachable code";
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    _ = 42 orelse return;
+            \\    _ = "reachable code";
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    _ = 42 catch return;
+            \\    _ = "reachable code";
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    _ = 42 catch return;
+            \\    _ = "reachable code";
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
