@@ -1102,6 +1102,73 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(comptime Bar: type) void {
+            \\    const quux: std.ArrayList(Bar) = undefined;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(comptime Bar: type) void {
+            \\    const quux: std.ArrayList(Bar) = undefined;
+            \\    _ = quux; // XXX ZLOPPY unused var quux
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    comptime {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    comptime {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    nosuspend {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    nosuspend {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(bar: u8) void {
+            \\    var res: u8 = undefined;
+            \\    @mulWithOverflow(u8, bar, 8, &res);
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: u8) void {
+            \\    var res: u8 = undefined;
+            \\    @mulWithOverflow(u8, bar, 8, &res);
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

@@ -94,6 +94,8 @@ fn traverseNode(
             .array_init_dot_comma,
             .struct_init_dot,
             .struct_init_dot_comma,
+            .builtin_call,
+            .builtin_call_comma,
             .container_decl,
             .container_decl_trailing,
             => {
@@ -146,6 +148,7 @@ fn traverseNode(
             },
 
             // both lhs and rhs must be checked (if set)
+            .simple_var_decl,
             .@"catch",
             .equal_equal,
             .bang_equal,
@@ -254,6 +257,8 @@ fn traverseNode(
             .@"resume",
             .@"return",
             .grouped_expression,
+            .@"comptime",
+            .@"nosuspend",
             => {
                 if (datas[node].lhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
@@ -264,7 +269,6 @@ fn traverseNode(
             // only rhs must be checked (if set)
             .global_var_decl,
             .local_var_decl,
-            .simple_var_decl,
             .aligned_var_decl,
             .test_decl,
             .@"errdefer",
