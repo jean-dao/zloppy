@@ -428,7 +428,12 @@ const ZloppyChecks = struct {
     }
 
     fn deinit(self: *ZloppyChecks) void {
-        std.debug.assert(self.bindings.items.len == 1);
+        // assert only the toplevel scope remains
+        std.debug.assert(self.bindings.items.len >= 1);
+        var i: usize = 1;
+        while (i < self.bindings.items.len) : (i += 1) {
+            std.debug.assert(!self.bindings.items[i].scope_marker);
+        }
         self.bindings.deinit();
     }
 
