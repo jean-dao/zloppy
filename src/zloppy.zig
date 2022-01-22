@@ -72,6 +72,22 @@ const TreeTraversalError = error{
     OutOfMemory,
 };
 
+fn traverseNodeExtraIndices(
+    comptime N: comptime_int,
+    action: anytype,
+    patches: *Patches,
+    tree: Tree,
+    parent: NodeIndex,
+    node: NodeIndex,
+) TreeTraversalError!bool {
+    inline for ([_]u8{0} ** N) |_, i| {
+        const extra = tree.extra_data[node + i];
+        if (extra != 0 and !try traverseNode(action, patches, tree, parent, extra))
+            return false;
+    }
+    return true;
+}
+
 fn traverseNode(
     action: anytype,
     patches: *Patches,
@@ -135,7 +151,9 @@ fn traverseNode(
             },
 
             // check sub range list from lhs and rhs (if set)
-            .switch_case => {
+            .switch_case,
+            .fn_proto_multi,
+            => {
                 const range = tree.extraData(datas[node].lhs, Node.SubRange);
                 for (tree.extra_data[range.start..range.end]) |idx| {
                     cont = try traverseNode(action, patches, tree, node, idx);
@@ -219,6 +237,7 @@ fn traverseNode(
             .while_simple,
             .for_simple,
             .if_simple,
+            .fn_proto_simple,
             .fn_decl,
             .builtin_call_two,
             .builtin_call_two_comma,
@@ -288,51 +307,50 @@ fn traverseNode(
             .slice,
             .container_field,
             => {
-                const TwoIndices = struct {
-                    expr1: NodeIndex,
-                    expr2: NodeIndex,
-                };
-
                 cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
-                const extra = tree.extraData(datas[node].rhs, TwoIndices);
-                if (extra.expr1 != 0) {
-                    cont = try traverseNode(action, patches, tree, node, extra.expr1);
-                    if (!cont) break :blk;
-                }
-                if (extra.expr2 != 0) {
-                    cont = try traverseNode(action, patches, tree, node, extra.expr2);
-                    if (!cont) break :blk;
-                }
+                cont = try traverseNodeExtraIndices(2, action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
             },
 
             // check lhs and 3 indices at rhs
             .slice_sentinel,
             .@"while",
             => {
-                const ThreeIndices = struct {
-                    expr1: NodeIndex,
-                    expr2: NodeIndex,
-                    expr3: NodeIndex,
-                };
-
                 cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
-                const extra = tree.extraData(datas[node].rhs, ThreeIndices);
-                if (extra.expr1 != 0) {
-                    cont = try traverseNode(action, patches, tree, node, extra.expr1);
+                cont = try traverseNodeExtraIndices(3, action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
+            },
+
+            // check 5 indices at lhs and rhs
+            .fn_proto_one,
+            => {
+                cont = try traverseNodeExtraIndices(5, action, patches, tree, node, datas[node].lhs);
+                if (!cont) break :blk;
+
+                cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
+            },
+
+            // special case: fn proto
+            .fn_proto,
+            => {
+                // fn proto has first a range (2 indices) then 3 indices in extra data
+                const range = tree.extraData(datas[node].lhs, Node.SubRange);
+                for (tree.extra_data[range.start..range.end]) |idx| {
+                    cont = try traverseNode(action, patches, tree, node, idx);
                     if (!cont) break :blk;
                 }
-                if (extra.expr2 != 0) {
-                    cont = try traverseNode(action, patches, tree, node, extra.expr2);
-                    if (!cont) break :blk;
-                }
-                if (extra.expr3 != 0) {
-                    cont = try traverseNode(action, patches, tree, node, extra.expr3);
-                    if (!cont) break :blk;
-                }
+
+                const extraIndex = datas[node].lhs + 2;
+                cont = try traverseNodeExtraIndices(3, action, patches, tree, node, extraIndex);
+                if (!cont) break :blk;
+
+                cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
             },
 
             else => {},
@@ -515,11 +533,11 @@ const ZloppyChecks = struct {
             .unreachable_from => unreachable,
         }
 
-        // Check parent to know if we should push a new scope and possibly add
-        // a capture. In some cases we cannot tell if a new scope should be
-        // pushed only from the node itself (e.g. for single-statement blocks).
-        // Captures are not part of the Ast, so they must be added here.
         switch (tree.nodes.items(.tag)[parent]) {
+            // Check parent to know if we should push a new scope and possibly add
+            // a capture. In some cases we cannot tell if a new scope should be
+            // pushed only from the node itself (e.g. for single-statement blocks).
+            // Captures are not part of the Ast, so they must be added here.
             .@"catch",
             .@"orelse",
             .switch_case_one,
@@ -537,6 +555,26 @@ const ZloppyChecks = struct {
                 if (node != lhs) {
                     try self.pushScopeWithCapture(tree, node);
                     return true;
+                }
+            },
+
+            // Check parent to know if we are traversing fn parameter declarations
+            .fn_proto_simple,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto,
+            => {
+                // Only declare parameters if fn_proto* is part of a fn_decl
+                // (i.e. has a lbrace afterward).
+                // Since fn_proto* sub nodes are types, check for a leading ':'
+                // to distinguish parameters from return type.
+                const maybe_colon = tree.firstToken(node) - 1;
+                const maybe_lbrace = tree.lastToken(parent) + 1;
+                if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace and
+                    tree.tokens.items(.tag)[maybe_colon] == .colon) {
+                    const name = maybe_colon - 1;
+                    std.debug.assert(tree.tokens.items(.tag)[name] == .identifier);
+                    try self.addBinding(tree, parent, name);
                 }
             },
 
@@ -574,7 +612,7 @@ const ZloppyChecks = struct {
         parent: NodeIndex,
         node: NodeIndex,
     ) !void {
-        const node_data = tree.nodes.items(.data)[node];
+        const parent_tag = tree.nodes.items(.tag)[parent];
         const node_token = tree.nodes.items(.main_token)[node];
         switch (tree.nodes.items(.tag)[node]) {
             // check unused variable in current fn_decls, blocks
@@ -600,38 +638,10 @@ const ZloppyChecks = struct {
                 return;
             },
 
-            // update current scope for var decls and fn param decls
+            // update current scope for var decls
             .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => {
                 const name = node_token + 1;
                 try self.addBinding(tree, node, name);
-            },
-            .fn_proto_simple => {
-                var param = node_token + 3;
-                if (tree.tokens.items(.tag)[param] == .keyword_comptime)
-                    param += 1;
-                if (tree.tokens.items(.tag)[param] == .identifier)
-                    try self.addBinding(tree, node, param);
-            },
-            .fn_proto_multi => {
-                const params_range = tree.extraData(node_data.lhs, Node.SubRange);
-                for (tree.extra_data[params_range.start..params_range.end]) |param_idx| {
-                    const param = tree.firstToken(param_idx) - 2;
-                    try self.addBinding(tree, node, param);
-                }
-            },
-            .fn_proto_one => {
-                const extra = tree.extraData(node_data.lhs, Node.FnProtoOne);
-                if (extra.param != 0) {
-                    const param = tree.firstToken(extra.param) - 2;
-                    try self.addBinding(tree, node, param);
-                }
-            },
-            .fn_proto => {
-                const extra = tree.extraData(node_data.lhs, Node.FnProto);
-                for (tree.extra_data[extra.params_start..extra.params_end]) |param_idx| {
-                    const param = tree.firstToken(param_idx) - 2;
-                    try self.addBinding(tree, node, param);
-                }
             },
 
             // set used bit for identifier
@@ -649,7 +659,7 @@ const ZloppyChecks = struct {
         }
 
         // scope pushed in before() must be popped on same conditions
-        switch (tree.nodes.items(.tag)[parent]) {
+        switch (parent_tag) {
             .@"catch",
             .@"orelse",
             .switch_case_one,

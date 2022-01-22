@@ -1169,6 +1169,19 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(comptime T: type, bar: T) void {
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(comptime T: type, bar: T) void {
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
