@@ -138,6 +138,7 @@ fn traverseNode(
             .container_decl_arg_trailing,
             .tagged_union_enum_tag,
             .tagged_union_enum_tag_trailing,
+            .@"asm",
             => {
                 if (datas[node].lhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
@@ -278,6 +279,9 @@ fn traverseNode(
             .grouped_expression,
             .@"comptime",
             .@"nosuspend",
+            .asm_simple,
+            .asm_output,
+            .asm_input,
             => {
                 if (datas[node].lhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
@@ -653,6 +657,16 @@ const ZloppyChecks = struct {
             .@"return" => {
                 std.debug.assert(self.state == .reachable_code);
                 self.state = .return_reached;
+            },
+
+            // set used bit for identifier used in asm_output
+            .asm_output => {
+                const lhs = tree.nodes.items(.data)[node].lhs;
+                if (lhs == 0) {
+                    const name = tree.nodes.items(.data)[node].rhs - 1;
+                    std.debug.assert(tree.tokens.items(.tag)[name] == .identifier);
+                    self.setUsed(tree, name);
+                }
             },
 
             else => {},

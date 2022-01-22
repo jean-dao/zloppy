@@ -1182,6 +1182,54 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn drc(comptime second: bool, comptime rc: u8, t: BlockVec, tx: BlockVec) BlockVec {
+            \\    var s: BlockVec = undefined;
+            \\    var ts: BlockVec = undefined;
+            \\    return asm (
+            \\        \\ vaeskeygenassist %[rc], %[t], %[s]
+            \\        \\ vpslldq $4, %[tx], %[ts]
+            \\        \\ vpxor   %[ts], %[tx], %[r]
+            \\        \\ vpslldq $8, %[r], %[ts]
+            \\        \\ vpxor   %[ts], %[r], %[r]
+            \\        \\ vpshufd %[mask], %[s], %[ts]
+            \\        \\ vpxor   %[ts], %[r], %[r]
+            \\        : [r] "=&x" (-> BlockVec),
+            \\          [s] "=&x" (s),
+            \\          [ts] "=&x" (ts),
+            \\        : [rc] "n" (rc),
+            \\          [t] "x" (t),
+            \\          [tx] "x" (tx),
+            \\          [mask] "n" (@as(u8, if (second) 0xaa else 0xff)),
+            \\    );
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn drc(comptime second: bool, comptime rc: u8, t: BlockVec, tx: BlockVec) BlockVec {
+            \\    var s: BlockVec = undefined;
+            \\    var ts: BlockVec = undefined;
+            \\    return asm (
+            \\        \\ vaeskeygenassist %[rc], %[t], %[s]
+            \\        \\ vpslldq $4, %[tx], %[ts]
+            \\        \\ vpxor   %[ts], %[tx], %[r]
+            \\        \\ vpslldq $8, %[r], %[ts]
+            \\        \\ vpxor   %[ts], %[r], %[r]
+            \\        \\ vpshufd %[mask], %[s], %[ts]
+            \\        \\ vpxor   %[ts], %[r], %[r]
+            \\        : [r] "=&x" (-> BlockVec),
+            \\          [s] "=&x" (s),
+            \\          [ts] "=&x" (ts),
+            \\        : [rc] "n" (rc),
+            \\          [t] "x" (t),
+            \\          [tx] "x" (tx),
+            \\          [mask] "n" (@as(u8, if (second) 0xaa else 0xff)),
+            \\    );
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
