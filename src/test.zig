@@ -1230,6 +1230,54 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(comptime T: type) error.OutOfMemory!T {}
+            \\
+        ,
+        .expected =
+            \\fn foo(comptime T: type) error.OutOfMemory!T {}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn Foo(comptime T: type) type {
+            \\    return struct {
+            \\        pub usingnamespace T;
+            \\    };
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn Foo(comptime T: type) type {
+            \\    return struct {
+            \\        pub usingnamespace T;
+            \\    };
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(comptime s: u8) [4:s]u8 {}
+            \\
+        ,
+        .expected =
+            \\fn foo(comptime s: u8) [4:s]u8 {}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(comptime s: u8) [:s]align(42) u8 {}
+            \\
+        ,
+        .expected =
+            \\fn foo(comptime s: u8) [:s]align(42) u8 {}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

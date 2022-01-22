@@ -250,6 +250,7 @@ fn traverseNode(
             .container_field_align,
             .block_two,
             .block_two_semicolon,
+            .error_union,
             => {
                 if (datas[node].lhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
@@ -262,6 +263,7 @@ fn traverseNode(
             },
 
             // only lhs must be checked (if set)
+            .@"usingnamespace",
             .field_access,
             .unwrap_optional,
             .bool_not,
@@ -305,6 +307,7 @@ fn traverseNode(
             },
 
             // check lhs and 2 indices at rhs
+            .array_type_sentinel,
             .while_cont,
             .@"if",
             .@"for",
@@ -326,6 +329,16 @@ fn traverseNode(
                 if (!cont) break :blk;
 
                 cont = try traverseNodeExtraIndices(3, action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
+            },
+
+            // check 3 indices at lhs and rhs
+            .ptr_type,
+            => {
+                cont = try traverseNodeExtraIndices(3, action, patches, tree, node, datas[node].lhs);
+                if (!cont) break :blk;
+
+                cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                 if (!cont) break :blk;
             },
 
