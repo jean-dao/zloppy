@@ -333,8 +333,7 @@ fn traverseNode(
             },
 
             // check 3 indices at lhs and rhs
-            .ptr_type,
-            => {
+            .ptr_type => {
                 cont = try traverseNodeExtraIndices(3, action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
@@ -343,8 +342,7 @@ fn traverseNode(
             },
 
             // check 5 indices at lhs and rhs
-            .fn_proto_one,
-            => {
+            .fn_proto_one => {
                 cont = try traverseNodeExtraIndices(5, action, patches, tree, node, datas[node].lhs);
                 if (!cont) break :blk;
 
@@ -353,8 +351,7 @@ fn traverseNode(
             },
 
             // special case: fn proto
-            .fn_proto,
-            => {
+            .fn_proto => {
                 // fn proto has first a range (2 indices) then 3 indices in extra data
                 const range = tree.extraData(datas[node].lhs, Node.SubRange);
                 for (tree.extra_data[range.start..range.end]) |idx| {
@@ -588,7 +585,8 @@ const ZloppyChecks = struct {
                 const maybe_colon = tree.firstToken(node) - 1;
                 const maybe_lbrace = tree.lastToken(parent) + 1;
                 if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace and
-                    tree.tokens.items(.tag)[maybe_colon] == .colon) {
+                    tree.tokens.items(.tag)[maybe_colon] == .colon)
+                {
                     const name = maybe_colon - 1;
                     std.debug.assert(tree.tokens.items(.tag)[name] == .identifier);
                     try self.addBinding(tree, parent, name);
@@ -667,7 +665,10 @@ const ZloppyChecks = struct {
             },
 
             // indicate next statements in scope will be unreachable
-            .@"return" => {
+            .@"continue",
+            .@"break",
+            .@"return",
+            => {
                 std.debug.assert(self.state == .reachable_code);
                 self.state = .return_reached;
             },

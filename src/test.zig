@@ -1278,6 +1278,48 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for ([_]u8{ 1, 2, 3 }) |i| {
+            \\        continue;
+            \\        _ = i;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for ([_]u8{ 1, 2, 3 }) |i| {
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\        continue;
+            \\        //_ = i; // XXX ZLOPPY unreachable code
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for ([_]u8{ 1, 2, 3 }) |i| {
+            \\        break;
+            \\        _ = i;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for ([_]u8{ 1, 2, 3 }) |i| {
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\        break;
+            \\        //_ = i; // XXX ZLOPPY unreachable code
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
