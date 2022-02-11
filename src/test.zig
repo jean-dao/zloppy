@@ -155,6 +155,20 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    _ = bar(); // XXX ZLOPPY ignored call return value
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    bar();
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1332,6 +1346,72 @@ const test_cases_on = [_]TestCase{
             \\        break;
             \\        //_ = i; // XXX ZLOPPY unreachable code
             \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {}
+            \\
+            \\fn bar() void {
+            \\    foo();
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {}
+            \\
+            \\fn bar() void {
+            \\    foo();
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() u32 {
+            \\    return 0;
+            \\}
+            \\
+            \\fn bar() void {
+            \\    foo();
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() u32 {
+            \\    return 0;
+            \\}
+            \\
+            \\fn bar() void {
+            \\    _ = foo(); // XXX ZLOPPY ignored call return value
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\const Foo = struct {
+            \\    fn quux() u32 {
+            \\        return 0;
+            \\    }
+            \\};
+            \\
+            \\fn bar() void {
+            \\    Foo.quux();
+            \\}
+            \\
+        ,
+        .expected =
+            \\const Foo = struct {
+            \\    fn quux() u32 {
+            \\        return 0;
+            \\    }
+            \\};
+            \\
+            \\fn bar() void {
+            \\    _ = Foo.quux(); // XXX ZLOPPY ignored call return value
             \\}
             \\
         ,

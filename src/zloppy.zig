@@ -24,6 +24,9 @@ pub const Patches = struct {
 
         // anchored on block main token (lbrace)
         first_unreachable_stmt: TokenIndex,
+
+        // anchored on block main token (lbrace)
+        ignore_ret_val: TokenIndex,
     };
 
     // mapping between anchors and patchsets
@@ -415,6 +418,225 @@ fn anchorFromNode(tree: Tree, node: NodeIndex) TokenIndex {
     }
 }
 
+const FnRetMap = struct {
+    const NamespaceIndex = u16;
+    const NamespaceValue = union(enum) {
+        fn_no_return_value,
+        fn_has_return_value,
+        nested: NamespaceIndex,
+    };
+
+    const NamespaceBinding = struct {
+        token: TokenIndex,
+        value: NamespaceValue,
+    };
+
+    const Namespace = std.ArrayList(NamespaceBinding);
+    namespaces: std.ArrayList(Namespace),
+    cur_chain: std.ArrayList(NamespaceIndex),
+
+    fn init(gpa: mem.Allocator) !FnRetMap {
+        var self = FnRetMap{
+            .namespaces = std.ArrayList(Namespace).init(gpa),
+            .cur_chain = std.ArrayList(NamespaceIndex).init(gpa),
+        };
+
+        try self.namespaces.append(Namespace.init(gpa));
+        try self.cur_chain.append(0);
+        return self;
+    }
+
+    fn deinit(self: *FnRetMap) void {
+        for (self.namespaces.items) |namespace| {
+            namespace.deinit();
+        }
+        self.namespaces.deinit();
+        self.cur_chain.deinit();
+    }
+
+    fn pushNamespace(self: *FnRetMap, token: TokenIndex) !void {
+        const namespace_idx = @intCast(NamespaceIndex, self.namespaces.items.len);
+        var namespace = Namespace.init(self.namespaces.allocator);
+        try self.namespaces.append(namespace);
+
+        const parent_namespace_idx = self.cur_chain.items[self.cur_chain.items.len - 1];
+        try self.namespaces.items[parent_namespace_idx].append(.{
+            .token = token,
+            .value = .{ .nested = namespace_idx },
+        });
+
+        try self.cur_chain.append(namespace_idx);
+    }
+
+    fn popNamespace(self: *FnRetMap) void {
+        std.debug.assert(self.cur_chain.items.len > 0);
+        self.cur_chain.items.len -= 1;
+    }
+
+    fn pushFn(self: *FnRetMap, token: TokenIndex, has_return_value: bool) !void {
+        const parent_namespace_idx = self.cur_chain.items[self.cur_chain.items.len - 1];
+        try self.namespaces.items[parent_namespace_idx].append(.{
+            .token = token,
+            .value = if (has_return_value) .fn_has_return_value else .fn_no_return_value,
+        });
+    }
+
+    fn getNamespaceValue(
+        self: FnRetMap,
+        tree: Tree,
+        parent: NamespaceIndex,
+        token: TokenIndex,
+    ) ?NamespaceValue {
+        for (self.namespaces.items[parent].items) |binding| {
+            if (std.mem.eql(u8, tree.tokenSlice(token), tree.tokenSlice(binding.token))) {
+                return binding.value;
+            }
+        }
+
+        return null;
+    }
+
+    fn getNamespaceRec(self: FnRetMap, tree: Tree, node: NodeIndex) ?NamespaceIndex {
+        var token: TokenIndex = undefined;
+        var parent: NamespaceIndex = undefined;
+        switch (tree.nodes.items(.tag)[node]) {
+            .field_access => {
+                token = tree.nodes.items(.data)[node].rhs;
+                parent = self.getNamespaceRec(tree, tree.nodes.items(.data)[node].lhs) orelse
+                    return null;
+            },
+            .identifier => {
+                token = tree.nodes.items(.main_token)[node];
+                parent = self.cur_chain.items[0];
+            },
+            else => return null,
+        }
+
+        if (self.getNamespaceValue(tree, parent, token)) |value| {
+            switch (value) {
+                .nested => |idx| return idx,
+                else => return null,
+            }
+        } else {
+            return null;
+        }
+    }
+
+    fn fnHasRet(self: FnRetMap, tree: Tree, node: NodeIndex) bool {
+        var token: TokenIndex = undefined;
+        var namespace: NamespaceIndex = undefined;
+        switch (tree.nodes.items(.tag)[node]) {
+            .field_access => {
+                token = tree.nodes.items(.data)[node].rhs;
+                namespace = self.getNamespaceRec(tree, tree.nodes.items(.data)[node].lhs) orelse
+                    return false;
+            },
+            .identifier => {
+                token = tree.nodes.items(.main_token)[node];
+                namespace = self.cur_chain.items[0];
+            },
+            else => return false,
+        }
+
+        if (self.getNamespaceValue(tree, namespace, token)) |value| {
+            return value == .fn_has_return_value;
+        } else {
+            return false;
+        }
+    }
+
+    fn before(
+        self: *FnRetMap,
+        patches: *Patches,
+        tree: Tree,
+        parent: NodeIndex,
+        node: NodeIndex,
+    ) !bool {
+        _ = parent;
+        _ = patches;
+        switch (tree.nodes.items(.tag)[node]) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            => {
+                const var_or_const = tree.nodes.items(.main_token)[node];
+                const init_expr = tree.nodes.items(.data)[node].rhs;
+                if (tree.tokens.items(.tag)[var_or_const] == .keyword_const and
+                    init_expr != 0)
+                {
+                    switch (tree.nodes.items(.tag)[init_expr]) {
+                        .container_decl,
+                        .container_decl_trailing,
+                        .container_decl_two,
+                        .container_decl_two_trailing,
+                        => {
+                            const name = var_or_const + 1;
+                            try self.pushNamespace(name);
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return true;
+    }
+
+    fn after(
+        self: *FnRetMap,
+        patches: *Patches,
+        tree: Tree,
+        parent: NodeIndex,
+        node: NodeIndex,
+    ) !void {
+        _ = parent;
+        _ = patches;
+        switch (tree.nodes.items(.tag)[node]) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            => {
+                const var_or_const = tree.nodes.items(.main_token)[node];
+                const init_expr = tree.nodes.items(.data)[node].rhs;
+                if (tree.tokens.items(.tag)[var_or_const] == .keyword_const and
+                    init_expr != 0)
+                {
+                    switch (tree.nodes.items(.tag)[init_expr]) {
+                        .container_decl,
+                        .container_decl_trailing,
+                        .container_decl_two,
+                        .container_decl_two_trailing,
+                        => {
+                            self.popNamespace();
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .fn_proto_simple,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto,
+            => {
+                const kw_fn = tree.nodes.items(.main_token)[node];
+                const maybe_name = kw_fn + 1;
+                if (tree.tokens.items(.tag)[maybe_name] == .identifier) {
+                    const ret_type = tree.nodes.items(.data)[node].rhs;
+                    const ret_type_tok = tree.nodes.items(.main_token)[ret_type];
+                    const ret_type_str = tree.tokenSlice(ret_type_tok);
+                    const has_ret = !mem.eql(u8, ret_type_str, "void") and
+                        !mem.eql(u8, ret_type_str, "noreturn");
+                    try self.pushFn(maybe_name, has_ret);
+                }
+            },
+            else => {},
+        }
+    }
+};
+
 const ZloppyChecks = struct {
     const Binding = struct {
         token: TokenIndex = 0,
@@ -429,11 +651,13 @@ const ZloppyChecks = struct {
         return_reached,
         unreachable_from: TokenIndex,
     },
+    fn_ret_map: FnRetMap,
 
-    fn init(gpa: mem.Allocator) !ZloppyChecks {
+    fn init(gpa: mem.Allocator, fn_ret_map: FnRetMap) !ZloppyChecks {
         var self = ZloppyChecks{
             .bindings = std.ArrayList(Binding).init(gpa),
             .state = .reachable_code,
+            .fn_ret_map = fn_ret_map,
         };
 
         try self.pushScope();
@@ -683,6 +907,30 @@ const ZloppyChecks = struct {
                 }
             },
 
+            // check unused call return values
+            .call_one,
+            .call_one_comma,
+            .call,
+            .call_comma,
+            => {
+                switch (parent_tag) {
+                    .block,
+                    .block_semicolon,
+                    .block_two,
+                    .block_two_semicolon,
+                    => {
+                        const name = tree.nodes.items(.data)[node].lhs;
+                        if (self.fn_ret_map.fnHasRet(tree, name)) {
+                            try patches.append(
+                                tree.nodes.items(.main_token)[parent],
+                                .{ .ignore_ret_val = tree.nodes.items(.main_token)[node] },
+                            );
+                        }
+                    },
+                    else => {},
+                }
+            },
+
             else => {},
         }
 
@@ -714,10 +962,18 @@ const ZloppyChecks = struct {
 
 pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
     var patches = Patches.init(gpa);
-    var checks = try ZloppyChecks.init(gpa);
-    defer checks.deinit();
+    const roots = tree.rootDecls();
 
-    for (tree.rootDecls()) |node| {
+    var fn_ret_map = try FnRetMap.init(gpa);
+    defer fn_ret_map.deinit();
+    for (roots) |node| {
+        if (!try traverseNode(&fn_ret_map, &patches, tree, 0, node))
+            break;
+    }
+
+    var checks = try ZloppyChecks.init(gpa, fn_ret_map);
+    defer checks.deinit();
+    for (roots) |node| {
         if (!try traverseNode(&checks, &patches, tree, 0, node))
             break;
     }
@@ -747,6 +1003,13 @@ fn cleanLine(
         mem.set(u8, source[zloppy_comment_start..end], ' ');
         if (mem.indexOf(u8, source[start..end], "//")) |first_comment| {
             mem.set(u8, source[start + first_comment .. start + first_comment + 2], ' ');
+        } else {
+            return error.InvalidCommentFound;
+        }
+    } else if (mem.startsWith(u8, descr, "ignored call return value")) {
+        mem.set(u8, source[zloppy_comment_start..end], ' ');
+        if (mem.indexOf(u8, source[start..end], "_ = ")) |ignore_stmt| {
+            mem.set(u8, source[start + ignore_stmt .. start + ignore_stmt + 3], ' ');
         } else {
             return error.InvalidCommentFound;
         }

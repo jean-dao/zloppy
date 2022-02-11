@@ -25,6 +25,13 @@ fn renderZloppyUnused(ais: *Ais, tree: Ast, token: Ast.TokenIndex) !void {
     ais.patches.rendered_comments += 1;
 }
 
+fn renderZloppyIgnoredCall(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index) !void {
+    try ais.writer().print("_ = ", .{});
+    try renderExpression(gpa, ais, tree, node, .none);
+    try ais.writer().print("; {s} ignored call return value\n", .{zloppy_comment});
+    ais.patches.rendered_comments += 1;
+}
+
 fn renderZloppyCommentedOutLines(
     ais: *Ais,
     tree: Ast,
@@ -1663,6 +1670,9 @@ fn renderBlock(
     // check lbrace anchor for patches
     var first_unreachable_stmt: Ast.TokenIndex = 0;
     var lbrace_rendered = false;
+    var ignored_fn_calls = std.ArrayList(Ast.TokenIndex).init(gpa);
+    defer ignored_fn_calls.deinit();
+
     if (ais.patches.get(lbrace)) |tok_patches| {
         for (tok_patches) |patch| {
             switch (patch) {
@@ -1676,6 +1686,9 @@ fn renderBlock(
                 .first_unreachable_stmt => |token| {
                     first_unreachable_stmt = token;
                 },
+                .ignore_ret_val => |token| {
+                    try ignored_fn_calls.append(token);
+                },
             }
         }
     }
@@ -1687,7 +1700,8 @@ fn renderBlock(
         for (statements) |stmt, i| {
             if (i != 0) try renderExtraNewline(ais, tree, stmt);
 
-            if (tree.nodes.items(.main_token)[stmt] == first_unreachable_stmt)
+            const main_token = tree.nodes.items(.main_token)[stmt];
+            if (main_token == first_unreachable_stmt)
                 break;
 
             switch (node_tags[stmt]) {
@@ -1695,7 +1709,16 @@ fn renderBlock(
                 .local_var_decl => try renderVarDecl(gpa, ais, tree, tree.localVarDecl(stmt)),
                 .simple_var_decl => try renderVarDecl(gpa, ais, tree, tree.simpleVarDecl(stmt)),
                 .aligned_var_decl => try renderVarDecl(gpa, ais, tree, tree.alignedVarDecl(stmt)),
-                else => try renderExpression(gpa, ais, tree, stmt, .semicolon),
+                else => {
+                    for (ignored_fn_calls.items) |token| {
+                        if (main_token == token) {
+                            try renderZloppyIgnoredCall(gpa, ais, tree, stmt);
+                            break;
+                        }
+                    } else {
+                        try renderExpression(gpa, ais, tree, stmt, .semicolon);
+                    }
+                },
             }
         }
 
