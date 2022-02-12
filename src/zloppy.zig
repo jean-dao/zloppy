@@ -755,29 +755,50 @@ fn cleanLine(
     }
 }
 
+fn lastComment(line: []const u8) ?usize {
+    if (line.len < "//".len)
+        return null;
+
+    var i: usize = line.len;
+    while (i > 1) : (i -= 1) {
+        if (mem.eql(u8, line[i - 2 .. i], "//")) {
+            return i - 2;
+        } else if (!isAllowedInZloppyComment(line[i - 1])) {
+            return null;
+        }
+    }
+
+    return null;
+}
+
 pub fn cleanSource(filename: []const u8, source: []u8) !u32 {
     var removed: u32 = 0;
     var start: usize = 0;
     var line_no: usize = 1;
+    var ignoring = false;
     blk: while (mem.indexOfPos(u8, source, start, "\n")) |end| : ({
         start = end + 1;
         line_no += 1;
     }) {
         const line = source[start..end];
-        if (line.len < zloppy_comment.len)
-            continue :blk;
 
-        // Since not all characters are allowed in zloppy comments, we can
-        // simply look for "// XXX ZLOPPY" from the end of the line without
-        // having to check for string literals and such.
-        var i: usize = line.len;
-        while (i > 1) : (i -= 1) {
-            const maybe_comment_start = line[i - 2 .. i];
-            const char = line[i - 1];
-            if (mem.eql(u8, maybe_comment_start, "//") and
-                mem.startsWith(u8, line[i - 2 ..], zloppy_comment))
-            {
-                cleanLine(source, start, end, start + i - 2) catch |err| {
+        if (lastComment(line)) |index| {
+            const comment = line[index..];
+
+            // Respect zig fmt: on/off
+            const content = mem.trim(u8, comment[2..], " ");
+            if (mem.eql(u8, content, "zig fmt: on")) {
+                ignoring = false;
+            } else if (mem.eql(u8, content, "zig fmt: off")) {
+                ignoring = true;
+            }
+
+            if (ignoring)
+                continue :blk;
+
+            // Clean line if a zloppy comment is present
+            if (mem.startsWith(u8, comment, zloppy_comment)) {
+                cleanLine(source, start, end, start + index) catch |err| {
                     std.log.warn(
                         "invalid zloppy comment found in file '{s}' on line {}, " ++
                             "file left untouched",
@@ -786,8 +807,6 @@ pub fn cleanSource(filename: []const u8, source: []u8) !u32 {
                     return err;
                 };
                 removed += 1;
-            } else if (!isAllowedInZloppyComment(char)) {
-                continue :blk;
             }
         }
     }

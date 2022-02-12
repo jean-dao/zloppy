@@ -139,6 +139,22 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    // zig fmt: off
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    // zig fmt: off
+            \\    _ = bar; // XXX ZLOPPY unused var bar
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
