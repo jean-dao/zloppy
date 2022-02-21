@@ -1426,7 +1426,7 @@ fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 0);
 
-    var patches = try zloppy.genPatches(std.testing.allocator, tree);
+    var patches = try zloppy.genPatches(std.testing.allocator, tree, true);
     defer patches.deinit();
 
     var out_buffer = std.ArrayList(u8).init(std.testing.allocator);

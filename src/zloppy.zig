@@ -651,9 +651,9 @@ const ZloppyChecks = struct {
         return_reached,
         unreachable_from: TokenIndex,
     },
-    fn_ret_map: FnRetMap,
+    fn_ret_map: ?FnRetMap,
 
-    fn init(gpa: mem.Allocator, fn_ret_map: FnRetMap) !ZloppyChecks {
+    fn init(gpa: mem.Allocator, fn_ret_map: ?FnRetMap) !ZloppyChecks {
         var self = ZloppyChecks{
             .bindings = std.ArrayList(Binding).init(gpa),
             .state = .reachable_code,
@@ -672,6 +672,10 @@ const ZloppyChecks = struct {
             std.debug.assert(!self.bindings.items[i].scope_marker);
         }
         self.bindings.deinit();
+
+        if (self.fn_ret_map) |*fn_ret_map| {
+            fn_ret_map.deinit();
+        }
     }
 
     fn pushScope(self: *ZloppyChecks) !void {
@@ -913,14 +917,14 @@ const ZloppyChecks = struct {
             .call,
             .call_comma,
             => {
-                switch (parent_tag) {
+                if (self.fn_ret_map) |fn_ret_map| switch (parent_tag) {
                     .block,
                     .block_semicolon,
                     .block_two,
                     .block_two_semicolon,
                     => {
                         const name = tree.nodes.items(.data)[node].lhs;
-                        if (self.fn_ret_map.fnHasRet(tree, name)) {
+                        if (fn_ret_map.fnHasRet(tree, name)) {
                             try patches.append(
                                 tree.nodes.items(.main_token)[parent],
                                 .{ .ignore_ret_val = tree.nodes.items(.main_token)[node] },
@@ -928,7 +932,7 @@ const ZloppyChecks = struct {
                         }
                     },
                     else => {},
-                }
+                };
             },
 
             else => {},
@@ -960,18 +964,25 @@ const ZloppyChecks = struct {
     }
 };
 
-pub fn genPatches(gpa: mem.Allocator, tree: Tree) !Patches {
+pub fn genPatches(gpa: mem.Allocator, tree: Tree, fix_ret_vals: bool) !Patches {
     var patches = Patches.init(gpa);
     const roots = tree.rootDecls();
 
-    var fn_ret_map = try FnRetMap.init(gpa);
-    defer fn_ret_map.deinit();
-    for (roots) |node| {
-        if (!try traverseNode(&fn_ret_map, &patches, tree, 0, node))
-            break;
-    }
+    var checks = blk: {
+        if (fix_ret_vals) {
+            var fn_ret_map = try FnRetMap.init(gpa);
 
-    var checks = try ZloppyChecks.init(gpa, fn_ret_map);
+            for (roots) |node| {
+                if (!try traverseNode(&fn_ret_map, &patches, tree, 0, node))
+                    break;
+            }
+
+            break :blk try ZloppyChecks.init(gpa, fn_ret_map);
+        } else {
+            break :blk try ZloppyChecks.init(gpa, null);
+        }
+    };
+
     defer checks.deinit();
     for (roots) |node| {
         if (!try traverseNode(&checks, &patches, tree, 0, node))

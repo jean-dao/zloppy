@@ -11,8 +11,13 @@ const usage =
     \\   recursively.
     \\
     \\Options:
-    \\    -h, --help  Print this help and exit
-    \\    --stdin     Format code from stdin; output to stdout
+    \\    -h, --help      Print this help and exit
+    \\    --stdin         Format code from stdin; output to stdout
+    \\    --experimental  Enable experimental features:
+    \\                      - Silence errors about ignored fn return values.
+    \\                        Only functions defined in the same files are checked,
+    \\                        return types depending on comptime features may lead
+    \\                        to false positives.
     \\
     \\Commands:
     \\    on          Enable sloppy mode
@@ -42,6 +47,7 @@ fn logErr(err: anyerror, comptime format: []const u8, args: anytype) void {
 const Params = struct {
     cmd: Cmd,
     stdin: bool,
+    experimental: bool,
     input_paths: std.ArrayList([]const u8),
 
     const Cmd = enum {
@@ -54,6 +60,7 @@ fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
     var params = Params{
         .cmd = undefined,
         .stdin = false,
+        .experimental = false,
         .input_paths = std.ArrayList([]const u8).init(gpa),
     };
 
@@ -68,6 +75,8 @@ fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
                 std.process.exit(0);
             } else if (std.mem.eql(u8, arg, "--stdin")) {
                 params.stdin = true;
+            } else if (std.mem.eql(u8, arg, "--experimental")) {
+                params.experimental = true;
             } else {
                 fatal("unrecognized parameter: '{s}'", .{arg});
             }
@@ -121,6 +130,7 @@ fn fmtFile(
     input_file: *const std.fs.File,
     filename: []const u8,
     size_hint: ?usize,
+    fix_ret_vals: bool,
 ) !FmtResult {
     const source = try input_file.readToEndAllocOptions(
         gpa,
@@ -146,7 +156,7 @@ fn fmtFile(
     var added: u32 = 0;
     switch (cmd) {
         .on => {
-            var patches = try zloppy.genPatches(gpa, tree);
+            var patches = try zloppy.genPatches(gpa, tree, fix_ret_vals);
             defer patches.deinit();
 
             try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, &patches);
@@ -261,6 +271,7 @@ fn fmtDir(
     gpa: std.mem.Allocator,
     cmd: Params.Cmd,
     dir: anytype,
+    fix_ret_vals: bool,
 ) error{FmtDirError}!void {
     var has_error = false;
     while (dir.getNextFileName()) |path| {
@@ -287,12 +298,12 @@ fn fmtDir(
                 continue;
             };
 
-            fmtDir(gpa, cmd, &subdir) catch {
+            fmtDir(gpa, cmd, &subdir, fix_ret_vals) catch {
                 has_error = true;
                 continue;
             };
         } else {
-            const result = fmtFile(gpa, cmd, &file, fullpath, stat.size) catch |err| {
+            const result = fmtFile(gpa, cmd, &file, fullpath, stat.size, fix_ret_vals) catch |err| {
                 logErr(err, "failed to format file '{s}'", .{fullpath});
                 has_error = true;
                 continue;
@@ -352,7 +363,7 @@ pub fn main() !void {
 
     if (params.stdin) {
         var stdin = std.io.getStdIn();
-        const result = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null) catch |err| {
+        const result = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null, params.experimental) catch |err| {
             logErr(err, "failed to format stdin", .{});
             std.process.exit(1);
         };
@@ -363,7 +374,7 @@ pub fn main() !void {
         };
     } else {
         var cwd = TopLevelDir{ .file_paths = params.input_paths.items };
-        fmtDir(gpa, params.cmd, &cwd) catch {
+        fmtDir(gpa, params.cmd, &cwd, params.experimental) catch {
             std.process.exit(1);
         };
     }
