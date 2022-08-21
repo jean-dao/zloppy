@@ -1,5 +1,5 @@
 // This file is a modified version of lib/std/zig/render.zig
-// Upstream version used: zig-0.10.0-dev.85+c0ae9647f
+// Upstream version used: zig-0.10.0-dev.3659+e5e6eb983
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -201,7 +201,8 @@ fn renderMember(gpa: Allocator, ais: *Ais, tree: Ast, decl: Ast.Node.Index, spac
         .test_decl => {
             const test_token = main_tokens[decl];
             try renderToken(ais, tree, test_token, .space);
-            if (token_tags[test_token + 1] == .string_literal) {
+            const test_name_tag = token_tags[test_token + 1];
+            if (test_name_tag == .string_literal or test_name_tag == .identifier) {
                 try renderToken(ais, tree, test_token + 1, .space);
             }
             try renderExpression(gpa, ais, tree, datas[decl].rhs, space);
@@ -304,8 +305,6 @@ fn renderExpressionInner(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.In
             try renderToken(ais, tree, main_tokens[node] + 1, .none);
             return renderToken(ais, tree, main_tokens[node] + 2, space);
         },
-
-        .@"anytype" => return renderToken(ais, tree, main_tokens[node], space),
 
         .block_two,
         .block_two_semicolon,
@@ -1330,12 +1329,7 @@ fn renderBuiltinCall(
 ) Error!void {
     const token_tags = tree.tokens.items(.tag);
 
-    const builtin_name = tokenSliceForRender(tree, builtin_token);
-    if (mem.eql(u8, builtin_name, "@byteOffsetOf")) {
-        try ais.writer().writeAll("@offsetOf");
-    } else {
-        try renderToken(ais, tree, builtin_token, .none); // @name
-    }
+    try renderToken(ais, tree, builtin_token, .none); // @name
 
     if (params.len == 0) {
         try renderToken(ais, tree, builtin_token + 1, .none); // (
@@ -1603,16 +1597,18 @@ fn renderSwitchCase(
     const node_tags = tree.nodes.items(.tag);
     const token_tags = tree.tokens.items(.tag);
     const trailing_comma = token_tags[switch_case.ast.arrow_token - 1] == .comma;
+    const has_comment_before_arrow = blk: {
+        if (switch_case.ast.values.len == 0) break :blk false;
+        break :blk hasComment(tree, tree.firstToken(switch_case.ast.values[0]), switch_case.ast.arrow_token);
+    };
 
     // Render everything before the arrow
     if (switch_case.ast.values.len == 0) {
         try renderToken(ais, tree, switch_case.ast.arrow_token - 1, .space); // else keyword
-    } else if (switch_case.ast.values.len == 1) {
+    } else if (switch_case.ast.values.len == 1 and !has_comment_before_arrow) {
         // render on one line and drop the trailing comma if any
         try renderExpression(gpa, ais, tree, switch_case.ast.values[0], .space);
-    } else if (trailing_comma or
-        hasComment(tree, tree.firstToken(switch_case.ast.values[0]), switch_case.ast.arrow_token))
-    {
+    } else if (trailing_comma or has_comment_before_arrow) {
         // Render each value on a new line
         try renderExpressions(gpa, ais, tree, switch_case.ast.values, .comma);
     } else {
@@ -1967,7 +1963,7 @@ fn renderArrayInit(
             } else {
                 var by_line = std.mem.split(u8, expr_text, "\n");
                 var last_line_was_empty = false;
-                try ais.writer().writeAll(by_line.next().?);
+                try ais.writer().writeAll(by_line.first());
                 while (by_line.next()) |line| {
                     if (std.mem.startsWith(u8, line, "//") and last_line_was_empty) {
                         try ais.insertNewline();
@@ -2073,15 +2069,24 @@ fn renderContainerDecl(
 
     const src_has_trailing_comma = token_tags[rbrace - 1] == .comma;
     if (!src_has_trailing_comma) one_line: {
-        // We can only print all the members in-line if there are no comments or multiline strings,
-        // and all the members are fields.
+        // We print all the members in-line unless one of the following conditions are true:
+
+        // 1. The container has comments or multiline strings.
         if (hasComment(tree, lbrace, rbrace) or hasMultilineString(tree, lbrace, rbrace)) {
             break :one_line;
         }
+
+        // 2. A member of the container has a doc comment.
+        for (token_tags[lbrace + 1 .. rbrace - 1]) |tag| {
+            if (tag == .doc_comment) break :one_line;
+        }
+
+        // 3. The container has non-field members.
         for (container_decl.ast.members) |member| {
             if (!node_tags[member].isContainerField()) break :one_line;
         }
-        // All the declarations on the same line.
+
+        // Print all the declarations on the same line.
         try renderToken(ais, tree, lbrace, .space); // lbrace
         for (container_decl.ast.members) |member| {
             try renderMember(gpa, ais, tree, member, .space);
@@ -2620,7 +2625,17 @@ fn renderDocComments(ais: *Ais, tree: Ast, end_token: Ast.TokenIndex) Error!void
     }
     const first_tok = tok;
     if (first_tok == end_token) return;
-    try renderExtraNewlineToken(ais, tree, first_tok);
+
+    if (first_tok != 0) {
+        const prev_token_tag = token_tags[first_tok - 1];
+
+        // Prevent accidental use of `renderDocComments` for a function argument doc comment
+        assert(prev_token_tag != .l_paren);
+
+        if (prev_token_tag != .l_brace) {
+            try renderExtraNewlineToken(ais, tree, first_tok);
+        }
+    }
 
     while (token_tags[tok] == .doc_comment) : (tok += 1) {
         try renderToken(ais, tree, tok, .newline);
@@ -2644,9 +2659,15 @@ fn renderContainerDocComments(ais: *Ais, tree: Ast, start_token: Ast.TokenIndex)
 
 fn tokenSliceForRender(tree: Ast, token_index: Ast.TokenIndex) []const u8 {
     var ret = tree.tokenSlice(token_index);
-    if (tree.tokens.items(.tag)[token_index] == .multiline_string_literal_line) {
-        assert(ret[ret.len - 1] == '\n');
-        ret.len -= 1;
+    switch (tree.tokens.items(.tag)[token_index]) {
+        .multiline_string_literal_line => {
+            assert(ret[ret.len - 1] == '\n');
+            ret.len -= 1;
+        },
+        .container_doc_comment, .doc_comment => {
+            ret = mem.trimRight(u8, ret, &std.ascii.spaces);
+        },
+        else => {},
     }
     return ret;
 }

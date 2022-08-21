@@ -205,10 +205,10 @@ const TopLevelDir = struct {
 };
 
 const Dir = struct {
-    dir: std.fs.Dir,
+    dir: std.fs.IterableDir,
     path: []const u8,
     fullpath: []const u8,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.fs.IterableDir.Iterator,
 
     fn init(
         parent: std.fs.Dir,
@@ -216,7 +216,7 @@ const Dir = struct {
         fullpath: []const u8,
     ) !Dir {
         var self = Dir{
-            .dir = try parent.openDir(path, .{ .iterate = true }),
+            .dir = try parent.openIterableDir(path, .{}),
             .path = path,
             .fullpath = fullpath,
             .iterator = undefined,
@@ -263,7 +263,7 @@ const Dir = struct {
     }
 
     fn getDir(self: *Dir) std.fs.Dir {
-        return self.dir;
+        return self.dir.dir;
     }
 };
 
