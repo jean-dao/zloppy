@@ -574,6 +574,22 @@ const FnRetMap = struct {
                             const name = var_or_const + 1;
                             try self.pushNamespace(name);
                         },
+                        .builtin_call_two,
+                        .builtin_call_two_comma,
+                        => {
+                            const builtin = tree.nodes.items(.main_token)[init_expr];
+                            const builtin_name = tree.tokenSlice(builtin);
+                            const lhs = tree.nodes.items(.data)[init_expr].lhs;
+                            if (std.mem.eql(u8, builtin_name, "@import") and lhs != 0) {
+                                const name = var_or_const + 1;
+                                try self.pushNamespace(name);
+
+                                const arg = tree.nodes.items(.main_token)[lhs];
+                                const arg_name = tree.tokenSlice(arg);
+                                if (std.mem.eql(u8, arg_name, "\"std\""))
+                                    std.debug.print("got std import\n", .{});
+                            }
+                        },
                         else => {},
                     }
                 }
