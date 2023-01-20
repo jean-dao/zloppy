@@ -298,7 +298,6 @@ fn traverseNode(
 
             // only rhs must be checked (if set)
             .global_var_decl,
-            .local_var_decl,
             .aligned_var_decl,
             .test_decl,
             .@"errdefer",
@@ -334,6 +333,15 @@ fn traverseNode(
                 if (!cont) break :blk;
 
                 cont = try traverseNodeExtraIndices(3, action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
+            },
+
+            // check 2 indices at lhs and rhs
+            .local_var_decl => {
+                cont = try traverseNodeExtraIndices(2, action, patches, tree, node, datas[node].lhs);
+                if (!cont) break :blk;
+
+                cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                 if (!cont) break :blk;
             },
 
