@@ -169,7 +169,7 @@ fn fmtFile(
 
     return FmtResult{
         .noop = std.mem.eql(u8, out_buffer.items, source),
-        .content = out_buffer.toOwnedSlice(),
+        .content = try out_buffer.toOwnedSlice(),
         .comments_removed = removed,
         .comments_added = added,
     };
