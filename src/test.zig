@@ -169,6 +169,26 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    switch (42) {
+            \\        inline else => |bar| {
+            \\            _ = bar; // XXX ZLOPPY unused var bar
+            \\        },
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    switch (42) {
+            \\        inline else => |bar| {},
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1412,6 +1432,26 @@ const test_cases_on = [_]TestCase{
             \\
             \\fn bar() void {
             \\    _ = Foo.quux(); // XXX ZLOPPY ignored call return value
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    switch (42) {
+            \\        inline else => |bar| {},
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    switch (42) {
+            \\        inline else => |bar| {
+            \\            _ = bar; // XXX ZLOPPY unused var bar
+            \\        },
+            \\    }
             \\}
             \\
         ,

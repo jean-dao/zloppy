@@ -156,6 +156,7 @@ fn traverseNode(
 
             // check sub range list from lhs and rhs (if set)
             .switch_case,
+            .switch_case_inline,
             .fn_proto_multi,
             => {
                 const range = tree.extraData(datas[node].lhs, Node.SubRange);
@@ -237,6 +238,7 @@ fn traverseNode(
             .async_call_one,
             .async_call_one_comma,
             .switch_case_one,
+            .switch_case_inline_one,
             .switch_range,
             .while_simple,
             .for_simple,
@@ -799,7 +801,9 @@ const ZloppyChecks = struct {
             .@"catch",
             .@"orelse",
             .switch_case_one,
+            .switch_case_inline_one,
             .switch_case,
+            .switch_case_inline,
             .while_simple,
             .while_cont,
             .@"while",
@@ -959,7 +963,9 @@ const ZloppyChecks = struct {
             .@"catch",
             .@"orelse",
             .switch_case_one,
+            .switch_case_inline_one,
             .switch_case,
+            .switch_case_inline,
             .while_simple,
             .while_cont,
             .@"while",
