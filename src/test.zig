@@ -189,6 +189,24 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const size = 42;
+            \\    const buf: [size]u8 align(8) = undefined;
+            \\    _ = buf;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const size = 42;
+            \\    const buf: [size]u8 align(8) = undefined;
+            \\    _ = buf;
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1452,6 +1470,24 @@ const test_cases_on = [_]TestCase{
             \\            _ = bar; // XXX ZLOPPY unused var bar
             \\        },
             \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const size = 42;
+            \\    const buf: [size]u8 align(8) = undefined;
+            \\    _ = buf;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const size = 42;
+            \\    const buf: [size]u8 align(8) = undefined;
+            \\    _ = buf;
             \\}
             \\
         ,
