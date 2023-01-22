@@ -265,6 +265,10 @@ const Dir = struct {
     fn getDir(self: *Dir) std.fs.Dir {
         return self.dir.dir;
     }
+
+    fn deinit(self: *Dir) void {
+        self.dir.close();
+    }
 };
 
 fn fmtDir(
@@ -283,7 +287,6 @@ fn fmtDir(
             has_error = true;
             continue;
         };
-        defer file.close();
 
         const stat = file.stat() catch |err| {
             logErr(err, "unable to stat file '{s}'", .{fullpath});
@@ -292,17 +295,23 @@ fn fmtDir(
         };
 
         if (stat.kind == .Directory) {
+            // close file right away to not let open fd pile up
+            file.close();
+
             var subdir = Dir.init(dir.getDir(), path, fullpath) catch |err| {
                 logErr(err, "unable to open directory '{s}'", .{fullpath});
                 has_error = true;
                 continue;
             };
+            defer subdir.deinit();
 
             fmtDir(gpa, cmd, &subdir, fix_ret_vals) catch {
                 has_error = true;
                 continue;
             };
         } else {
+            // close file after reading content
+            defer file.close();
             const result = fmtFile(gpa, cmd, &file, fullpath, stat.size, fix_ret_vals) catch |err| {
                 logErr(err, "failed to format file '{s}'", .{fullpath});
                 has_error = true;
