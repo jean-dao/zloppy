@@ -241,7 +241,6 @@ fn traverseNode(
             .switch_case_inline_one,
             .switch_range,
             .while_simple,
-            .for_simple,
             .if_simple,
             .fn_proto_simple,
             .fn_decl,
@@ -314,7 +313,6 @@ fn traverseNode(
             .array_type_sentinel,
             .while_cont,
             .@"if",
-            .@"for",
             .slice,
             .container_field,
             => {
@@ -361,6 +359,27 @@ fn traverseNode(
 
                 cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
                 if (!cont) break :blk;
+            },
+
+            // for loop
+            .for_simple,
+            .@"for",
+            => {
+                const full_for = tree.fullFor(node) orelse unreachable;
+                for (full_for.ast.inputs) |input| if (input != 0) {
+                    cont = try traverseNode(action, patches, tree, node, input);
+                    if (!cont) break :blk;
+                };
+
+                if (full_for.ast.then_expr != 0) {
+                    cont = try traverseNode(action, patches, tree, node, full_for.ast.then_expr);
+                    if (!cont) break :blk;
+                }
+
+                if (full_for.ast.else_expr != 0) {
+                    cont = try traverseNode(action, patches, tree, node, full_for.ast.else_expr);
+                    if (!cont) break :blk;
+                }
             },
 
             // special case: fn proto

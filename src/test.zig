@@ -207,6 +207,25 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for (&.{}) |_| {} else {
+            \\        const bar = true;
+            \\        _ = bar; // XXX ZLOPPY unused var bar
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for (&.{}) |_| {} else {
+            \\        const bar = true;
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1544,6 +1563,25 @@ const test_cases_on = [_]TestCase{
             \\fn foo() void {
             \\    @panic("hello");
             \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for (&.{}) |_| {} else {
+            \\        const bar = true;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for (&.{}) |_| {} else {
+            \\        const bar = true;
+            \\        _ = bar; // XXX ZLOPPY unused var bar
+            \\    }
             \\}
             \\
         ,
