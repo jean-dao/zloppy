@@ -1586,6 +1586,24 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const a = 42;
+            \\    for (0..a) |i| {}
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const a = 42;
+            \\    for (0..a) |i| {
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1628,8 +1646,7 @@ fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
 
 fn applyFn(fun: anytype, count: u8, input: [:0]const u8, expected: [:0]const u8) !void {
     var last_output = try std.testing.allocator.dupe(u8, input[0 .. input.len + 1]);
-    var i: u8 = 0;
-    while (i < count) : (i += 1) {
+    for (0..count) |_| {
         var output = try fun(last_output[0 .. last_output.len - 1 :0], expected);
         std.testing.allocator.free(last_output);
         last_output = output;

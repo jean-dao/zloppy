@@ -255,6 +255,7 @@ fn traverseNode(
             .block_two,
             .block_two_semicolon,
             .error_union,
+            .for_range,
             => {
                 if (datas[node].lhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].lhs);
@@ -707,9 +708,8 @@ const ZloppyChecks = struct {
     fn deinit(self: *ZloppyChecks) void {
         // assert only the toplevel scope remains
         std.debug.assert(self.bindings.items.len >= 1);
-        var i: usize = 1;
-        while (i < self.bindings.items.len) : (i += 1) {
-            std.debug.assert(!self.bindings.items[i].scope_marker);
+        for (self.bindings.items[1..]) |binding| {
+            std.debug.assert(!binding.scope_marker);
         }
         self.bindings.deinit();
 
