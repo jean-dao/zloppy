@@ -725,11 +725,26 @@ const ZloppyChecks = struct {
     fn pushScopeWithCapture(self: *ZloppyChecks, tree: Tree, node: NodeIndex) !void {
         try self.pushScope();
 
-        const maybe_capture = tree.firstToken(node) - 1;
-        if (tree.tokens.items(.tag)[maybe_capture] == .pipe) {
-            const capture = maybe_capture - 1;
-            std.debug.assert(tree.tokens.items(.tag)[capture] == .identifier);
-            try self.addBinding(tree, node, capture);
+        const tags = tree.tokens.items(.tag);
+        const maybe_capture_end = tree.firstToken(node) - 1;
+        if (tags[maybe_capture_end] == .pipe) {
+            var capture_name = maybe_capture_end - 1;
+            while (true) {
+                std.debug.assert(tags[capture_name] == .identifier);
+                try self.addBinding(tree, node, capture_name);
+
+                const maybe_asterisk = capture_name - 1;
+                const maybe_capture_sep = if (tags[maybe_asterisk] == .asterisk)
+                    maybe_asterisk - 1
+                else
+                    maybe_asterisk;
+
+                switch (tags[maybe_capture_sep]) {
+                    .comma => capture_name = maybe_capture_sep - 1,
+                    .pipe => break,
+                    else => unreachable,
+                }
+            }
         }
     }
 

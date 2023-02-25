@@ -1604,6 +1604,57 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |foo, i| {}
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |foo, i| {
+            \\        _ = foo; // XXX ZLOPPY unused var foo
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |*foo, i| {}
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |*foo, i| {
+            \\        _ = foo; // XXX ZLOPPY unused var foo
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |foo, *i| {}
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    for (&.{}, 0..) |foo, *i| {
+            \\        _ = foo; // XXX ZLOPPY unused var foo
+            \\        _ = i; // XXX ZLOPPY unused var i
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
