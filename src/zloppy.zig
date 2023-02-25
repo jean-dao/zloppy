@@ -593,11 +593,6 @@ const FnRetMap = struct {
                             if (std.mem.eql(u8, builtin_name, "@import") and lhs != 0) {
                                 const name = var_or_const + 1;
                                 try self.pushNamespace(name);
-
-                                const arg = tree.nodes.items(.main_token)[lhs];
-                                const arg_name = tree.tokenSlice(arg);
-                                if (std.mem.eql(u8, arg_name, "\"std\""))
-                                    std.debug.print("got std import\n", .{});
                             }
                         },
                         else => {},
