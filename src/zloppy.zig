@@ -909,9 +909,20 @@ const ZloppyChecks = struct {
             .@"continue",
             .@"break",
             .@"return",
+            .unreachable_literal,
             => {
                 std.debug.assert(self.state == .reachable_code);
                 self.state = .return_reached;
+            },
+
+            .builtin_call_two,
+            .builtin_call_two_comma,
+            => {
+                const name = tree.nodes.items(.main_token)[node];
+                if (std.mem.eql(u8, tree.tokenSlice(name), "@panic")) {
+                    std.debug.assert(self.state == .reachable_code);
+                    self.state = .return_reached;
+                }
             },
 
             // set used bit for identifier used in asm_output

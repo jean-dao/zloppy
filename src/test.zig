@@ -1516,6 +1516,38 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    unreachable;
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    unreachable;
+            \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    @panic("hello");
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    @panic("hello");
+            \\    //_ = 42; // XXX ZLOPPY unreachable code
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
