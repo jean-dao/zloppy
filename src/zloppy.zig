@@ -83,7 +83,7 @@ fn traverseNodeExtraIndices(
     parent: NodeIndex,
     node: NodeIndex,
 ) TreeTraversalError!bool {
-    inline for ([_]u8{0} ** N) |_, i| {
+    inline for (0..N) |i| {
         const extra = tree.extra_data[node + i];
         if (extra != 0 and !try traverseNode(action, patches, tree, parent, extra))
             return false;

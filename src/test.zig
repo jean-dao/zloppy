@@ -1498,7 +1498,7 @@ const test_cases_on = [_]TestCase{
 fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
     _ = try zloppy.cleanSource("<test input>", input);
 
-    var tree = try std.zig.parse(std.testing.allocator, input);
+    var tree = try std.zig.Ast.parse(std.testing.allocator, input, .zig);
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 0);
 
@@ -1518,7 +1518,7 @@ fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
 fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
     _ = try zloppy.cleanSource("<test input>", input);
 
-    var tree = try std.zig.parse(std.testing.allocator, input);
+    var tree = try std.zig.Ast.parse(std.testing.allocator, input, .zig);
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 0);
 

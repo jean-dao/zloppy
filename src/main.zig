@@ -143,7 +143,7 @@ fn fmtFile(
 
     const removed = try zloppy.cleanSource(filename, source);
 
-    var tree = try std.zig.parse(gpa, source);
+    var tree = try std.zig.Ast.parse(gpa, source, .zig);
     defer tree.deinit(gpa);
 
     if (tree.errors.len != 0) {
