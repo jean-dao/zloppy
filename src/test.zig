@@ -1492,6 +1492,30 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(a: anytype) void {}
+            \\
+        ,
+        .expected =
+            \\fn foo(a: anytype) void {
+            \\    _ = a; // XXX ZLOPPY unused var a
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo(f: fn (bar: usize) void) void {}
+            \\
+        ,
+        .expected =
+            \\fn foo(f: fn (bar: usize) void) void {
+            \\    _ = f; // XXX ZLOPPY unused var f
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

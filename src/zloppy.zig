@@ -823,33 +823,23 @@ const ZloppyChecks = struct {
                 }
             },
 
-            // Check parent to know if we are traversing fn parameter declarations
-            .fn_proto_simple,
-            .fn_proto_multi,
-            .fn_proto_one,
-            .fn_proto,
-            => {
-                // Only declare parameters if fn_proto* is part of a fn_decl
-                // (i.e. has a lbrace afterward).
-                // Since fn_proto* sub nodes are types, check for a leading ':'
-                // to distinguish parameters from return type.
-                const maybe_colon = tree.firstToken(node) - 1;
-                const maybe_lbrace = tree.lastToken(parent) + 1;
-                if (tree.tokens.items(.tag)[maybe_lbrace] == .l_brace and
-                    tree.tokens.items(.tag)[maybe_colon] == .colon)
-                {
-                    const name = maybe_colon - 1;
-                    std.debug.assert(tree.tokens.items(.tag)[name] == .identifier);
-                    try self.addBinding(tree, parent, name);
-                }
-            },
-
             else => {},
         }
 
-        // normal case: create a new scope for fn decls, blocks and containers
         switch (tree.nodes.items(.tag)[node]) {
-            .fn_decl,
+            // create new scope and add bindings for fn args
+            .fn_decl => {
+                try self.pushScope();
+
+                var buf = [1]NodeIndex{0};
+                const fn_proto = tree.fullFnProto(&buf, node) orelse unreachable;
+                var it = fn_proto.iterate(&tree);
+                while (it.next()) |param| {
+                    try self.addBinding(tree, node, param.name_token orelse unreachable);
+                }
+            },
+
+            // create a new scope for blocks and containers
             .container_decl,
             .container_decl_trailing,
             .container_decl_two,
