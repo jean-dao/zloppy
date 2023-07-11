@@ -1,5 +1,5 @@
 // This file is a modified version of lib/std/zig/render.zig
-// Upstream version used: zig-0.11.0-dev.1718+2737dce84
+// Upstream version used: zig-0.11.0-dev.3947+89396ff02
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -90,27 +90,28 @@ pub fn renderTreeWithPatches(buffer: *std.ArrayList(u8), tree: Ast, patches: *Pa
 /// Render all members in the given slice, keeping empty lines where appropriate
 fn renderMembers(gpa: Allocator, ais: *Ais, tree: Ast, members: []const Ast.Node.Index) Error!void {
     if (members.len == 0) return;
-    var is_tuple = true;
-    for (members) |member| {
-        const container_field = tree.fullContainerField(member) orelse continue;
-        if (!container_field.ast.tuple_like) {
-            is_tuple = false;
-            break;
-        }
-    }
-    try renderMember(gpa, ais, tree, members[0], is_tuple, .newline);
+    const container: Container = for (members) |member| {
+        if (tree.fullContainerField(member)) |field| if (!field.ast.tuple_like) break .other;
+    } else .tuple;
+    try renderMember(gpa, ais, tree, container, members[0], .newline);
     for (members[1..]) |member| {
         try renderExtraNewline(ais, tree, member);
-        try renderMember(gpa, ais, tree, member, is_tuple, .newline);
+        try renderMember(gpa, ais, tree, container, member, .newline);
     }
 }
+
+const Container = enum {
+    @"enum",
+    tuple,
+    other,
+};
 
 fn renderMember(
     gpa: Allocator,
     ais: *Ais,
     tree: Ast,
+    container: Container,
     decl: Ast.Node.Index,
-    is_tuple: bool,
     space: Space,
 ) Error!void {
     const token_tags = tree.tokens.items(.tag);
@@ -230,7 +231,7 @@ fn renderMember(
         .container_field_init,
         .container_field_align,
         .container_field,
-        => return renderContainerField(gpa, ais, tree, tree.fullContainerField(decl).?, is_tuple, space),
+        => return renderContainerField(gpa, ais, tree, container, tree.fullContainerField(decl).?, space),
 
         .@"comptime" => return renderExpression(gpa, ais, tree, decl, space),
 
@@ -757,7 +758,7 @@ fn renderExpressionInner(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.In
 
             try renderToken(ais, tree, switch_token, .space); // switch keyword
             try renderToken(ais, tree, switch_token + 1, .none); // lparen
-            try renderExpression(gpa, ais, tree, condition, .none); // condtion expression
+            try renderExpression(gpa, ais, tree, condition, .none); // condition expression
             try renderToken(ais, tree, rparen, .space); // rparen
 
             ais.pushIndentNextLine();
@@ -1370,19 +1371,23 @@ fn renderContainerField(
     gpa: Allocator,
     ais: *Ais,
     tree: Ast,
+    container: Container,
     field_param: Ast.full.ContainerField,
-    is_tuple: bool,
     space: Space,
 ) Error!void {
     var field = field_param;
-    if (!is_tuple) field.convertToNonTupleLike(tree.nodes);
+    if (container != .tuple) field.convertToNonTupleLike(tree.nodes);
+    const quote: QuoteBehavior = switch (container) {
+        .@"enum" => .eagerly_unquote_except_underscore,
+        .tuple, .other => .eagerly_unquote,
+    };
 
     if (field.comptime_token) |t| {
         try renderToken(ais, tree, t, .space); // comptime
     }
     if (field.ast.type_expr == 0 and field.ast.value_expr == 0) {
         if (field.ast.align_expr != 0) {
-            try renderIdentifier(ais, tree, field.ast.main_token, .space, .eagerly_unquote); // name
+            try renderIdentifier(ais, tree, field.ast.main_token, .space, quote); // name
             const lparen_token = tree.firstToken(field.ast.align_expr) - 1;
             const align_kw = lparen_token - 1;
             const rparen_token = tree.lastToken(field.ast.align_expr) + 1;
@@ -1391,11 +1396,11 @@ fn renderContainerField(
             try renderExpression(gpa, ais, tree, field.ast.align_expr, .none); // alignment
             return renderToken(ais, tree, rparen_token, .space); // )
         }
-        return renderIdentifierComma(ais, tree, field.ast.main_token, space, .eagerly_unquote); // name
+        return renderIdentifierComma(ais, tree, field.ast.main_token, space, quote); // name
     }
     if (field.ast.type_expr != 0 and field.ast.value_expr == 0) {
         if (!field.ast.tuple_like) {
-            try renderIdentifier(ais, tree, field.ast.main_token, .none, .eagerly_unquote); // name
+            try renderIdentifier(ais, tree, field.ast.main_token, .none, quote); // name
             try renderToken(ais, tree, field.ast.main_token + 1, .space); // :
         }
 
@@ -1412,7 +1417,7 @@ fn renderContainerField(
         }
     }
     if (field.ast.type_expr == 0 and field.ast.value_expr != 0) {
-        try renderIdentifier(ais, tree, field.ast.main_token, .space, .eagerly_unquote); // name
+        try renderIdentifier(ais, tree, field.ast.main_token, .space, quote); // name
         if (field.ast.align_expr != 0) {
             const lparen_token = tree.firstToken(field.ast.align_expr) - 1;
             const align_kw = lparen_token - 1;
@@ -1426,7 +1431,7 @@ fn renderContainerField(
         return renderExpressionComma(gpa, ais, tree, field.ast.value_expr, space); // value
     }
     if (!field.ast.tuple_like) {
-        try renderIdentifier(ais, tree, field.ast.main_token, .none, .eagerly_unquote); // name
+        try renderIdentifier(ais, tree, field.ast.main_token, .none, quote); // name
         try renderToken(ais, tree, field.ast.main_token + 1, .space); // :
     }
     try renderExpression(gpa, ais, tree, field.ast.type_expr, .space); // type
@@ -1476,14 +1481,88 @@ fn renderBuiltinCall(
 ) Error!void {
     const token_tags = tree.tokens.items(.tag);
 
-    // TODO remove before release of 0.11.0
+    // TODO remove before release of 0.12.0
     const slice = tree.tokenSlice(builtin_token);
+    const rewrite_two_param_cast = params.len == 2 and for ([_][]const u8{
+        "@bitCast",
+        "@errSetCast",
+        "@floatCast",
+        "@intCast",
+        "@ptrCast",
+        "@intFromFloat",
+        "@floatToInt",
+        "@enumFromInt",
+        "@intToEnum",
+        "@floatFromInt",
+        "@intToFloat",
+        "@ptrFromInt",
+        "@intToPtr",
+        "@truncate",
+    }) |name| {
+        if (mem.eql(u8, slice, name)) break true;
+    } else false;
+
+    if (rewrite_two_param_cast) {
+        const after_last_param_token = tree.lastToken(params[1]) + 1;
+        if (token_tags[after_last_param_token] != .comma) {
+            // Render all on one line, no trailing comma.
+            try ais.writer().writeAll("@as");
+            try renderToken(ais, tree, builtin_token + 1, .none); // (
+            try renderExpression(gpa, ais, tree, params[0], .comma_space);
+        } else {
+            // Render one param per line.
+            try ais.writer().writeAll("@as");
+            ais.pushIndent();
+            try renderToken(ais, tree, builtin_token + 1, .newline); // (
+            try renderExpression(gpa, ais, tree, params[0], .comma);
+        }
+    }
+    // Corresponding logic below builtin name rewrite below
+
+    // TODO remove before release of 0.11.0
     if (mem.eql(u8, slice, "@maximum")) {
         try ais.writer().writeAll("@max");
     } else if (mem.eql(u8, slice, "@minimum")) {
         try ais.writer().writeAll("@min");
+    }
+    // TODO remove before release of 0.12.0
+    else if (mem.eql(u8, slice, "@boolToInt")) {
+        try ais.writer().writeAll("@intFromBool");
+    } else if (mem.eql(u8, slice, "@enumToInt")) {
+        try ais.writer().writeAll("@intFromEnum");
+    } else if (mem.eql(u8, slice, "@errorToInt")) {
+        try ais.writer().writeAll("@intFromError");
+    } else if (mem.eql(u8, slice, "@floatToInt")) {
+        try ais.writer().writeAll("@intFromFloat");
+    } else if (mem.eql(u8, slice, "@intToEnum")) {
+        try ais.writer().writeAll("@enumFromInt");
+    } else if (mem.eql(u8, slice, "@intToError")) {
+        try ais.writer().writeAll("@errorFromInt");
+    } else if (mem.eql(u8, slice, "@intToFloat")) {
+        try ais.writer().writeAll("@floatFromInt");
+    } else if (mem.eql(u8, slice, "@intToPtr")) {
+        try ais.writer().writeAll("@ptrFromInt");
+    } else if (mem.eql(u8, slice, "@ptrToInt")) {
+        try ais.writer().writeAll("@intFromPtr");
     } else {
         try renderToken(ais, tree, builtin_token, .none); // @name
+    }
+
+    if (rewrite_two_param_cast) {
+        // Matches with corresponding logic above builtin name rewrite
+        const after_last_param_token = tree.lastToken(params[1]) + 1;
+        try ais.writer().writeAll("(");
+        try renderExpression(gpa, ais, tree, params[1], .none);
+        try ais.writer().writeAll(")");
+        if (token_tags[after_last_param_token] != .comma) {
+            // Render all on one line, no trailing comma.
+            return renderToken(ais, tree, after_last_param_token, space); // )
+        } else {
+            // Render one param per line.
+            ais.popIndent();
+            try renderToken(ais, tree, after_last_param_token, .newline); // ,
+            return renderToken(ais, tree, after_last_param_token + 1, space); // )
+        }
     }
 
     if (params.len == 0) {
@@ -1789,7 +1868,7 @@ fn renderSwitchCase(
 
     if (switch_case.payload_token) |payload_token| {
         try renderToken(ais, tree, payload_token - 1, .none); // pipe
-        const ident = payload_token + @boolToInt(token_tags[payload_token] == .asterisk);
+        const ident = payload_token + @intFromBool(token_tags[payload_token] == .asterisk);
         if (token_tags[payload_token] == .asterisk) {
             try renderToken(ais, tree, payload_token, .none); // asterisk
         }
@@ -2030,11 +2109,11 @@ fn renderArrayInit(
         // A place to store the width of each expression and its column's maximum
         const widths = try gpa.alloc(usize, row_exprs.len + row_size);
         defer gpa.free(widths);
-        mem.set(usize, widths, 0);
+        @memset(widths, 0);
 
         const expr_newlines = try gpa.alloc(bool, row_exprs.len);
         defer gpa.free(expr_newlines);
-        mem.set(bool, expr_newlines, false);
+        @memset(expr_newlines, false);
 
         const expr_widths = widths[0..row_exprs.len];
         const column_widths = widths[row_exprs.len..];
@@ -2097,7 +2176,7 @@ fn renderArrayInit(
 
                 if (!this_contains_newline) {
                     const column = column_counter % row_size;
-                    column_widths[column] = std.math.max(column_widths[column], width);
+                    column_widths[column] = @max(column_widths[column], width);
 
                     const expr_last_token = tree.lastToken(expr) + 1;
                     const next_expr = section_exprs[i + 1];
@@ -2117,7 +2196,7 @@ fn renderArrayInit(
 
                 if (!contains_newline) {
                     const column = column_counter % row_size;
-                    column_widths[column] = std.math.max(column_widths[column], width);
+                    column_widths[column] = @max(column_widths[column], width);
                 }
             }
         }
@@ -2132,7 +2211,7 @@ fn renderArrayInit(
             if (!expr_newlines[i]) {
                 try ais.writer().writeAll(expr_text);
             } else {
-                var by_line = std.mem.split(u8, expr_text, "\n");
+                var by_line = std.mem.splitScalar(u8, expr_text, '\n');
                 var last_line_was_empty = false;
                 try ais.writer().writeAll(by_line.first());
                 while (by_line.next()) |line| {
@@ -2196,13 +2275,12 @@ fn renderContainerDecl(
         try renderToken(ais, tree, layout_token, .space);
     }
 
-    var is_tuple = token_tags[container_decl.ast.main_token] == .keyword_struct;
-    if (is_tuple) for (container_decl.ast.members) |member| {
-        const container_field = tree.fullContainerField(member) orelse continue;
-        if (!container_field.ast.tuple_like) {
-            is_tuple = false;
-            break;
-        }
+    const container: Container = switch (token_tags[container_decl.ast.main_token]) {
+        .keyword_enum => .@"enum",
+        .keyword_struct => for (container_decl.ast.members) |member| {
+            if (tree.fullContainerField(member)) |field| if (!field.ast.tuple_like) break .other;
+        } else .tuple,
+        else => .other,
     };
 
     var lbrace: Ast.TokenIndex = undefined;
@@ -2271,7 +2349,7 @@ fn renderContainerDecl(
         // Print all the declarations on the same line.
         try renderToken(ais, tree, lbrace, .space); // lbrace
         for (container_decl.ast.members) |member| {
-            try renderMember(gpa, ais, tree, member, is_tuple, .space);
+            try renderMember(gpa, ais, tree, container, member, .space);
         }
         return renderToken(ais, tree, rbrace, space); // rbrace
     }
@@ -2289,9 +2367,9 @@ fn renderContainerDecl(
             .container_field_init,
             .container_field_align,
             .container_field,
-            => try renderMember(gpa, ais, tree, member, is_tuple, .comma),
+            => try renderMember(gpa, ais, tree, container, member, .comma),
 
-            else => try renderMember(gpa, ais, tree, member, is_tuple, .newline),
+            else => try renderMember(gpa, ais, tree, container, member, .newline),
         }
     }
     ais.popIndent();
@@ -2654,7 +2732,7 @@ const Space = enum {
     /// In either case, a newline will be inserted afterwards.
     semicolon,
     /// Skip rendering whitespace and comments. If this is used, the caller
-    /// *must* handle handle whitespace and comments manually.
+    /// *must* handle whitespace and comments manually.
     skip,
 };
 
@@ -2707,6 +2785,7 @@ fn renderSpace(ais: *Ais, tree: Ast, token_index: Ast.TokenIndex, lexeme_len: us
 const QuoteBehavior = enum {
     preserve_when_shadowing,
     eagerly_unquote,
+    eagerly_unquote_except_underscore,
 };
 
 fn renderIdentifier(ais: *Ais, tree: Ast, token_index: Ast.TokenIndex, space: Space, quote: QuoteBehavior) Error!void {
@@ -2731,7 +2810,9 @@ fn renderIdentifier(ais: *Ais, tree: Ast, token_index: Ast.TokenIndex, space: Sp
     // Special case for _ which would incorrectly be rejected by isValidId below.
     if (contents.len == 1 and contents[0] == '_') switch (quote) {
         .eagerly_unquote => return renderQuotedIdentifier(ais, tree, token_index, space, true),
-        .preserve_when_shadowing => return renderQuotedIdentifier(ais, tree, token_index, space, false),
+        .eagerly_unquote_except_underscore,
+        .preserve_when_shadowing,
+        => return renderQuotedIdentifier(ais, tree, token_index, space, false),
     };
 
     // Scan the entire name for characters that would (after un-escaping) be illegal in a symbol,
@@ -2780,7 +2861,7 @@ fn renderIdentifier(ais: *Ais, tree: Ast, token_index: Ast.TokenIndex, space: Sp
     while (contents_i < contents.len and buf_i < longest_keyword_or_primitive_len) {
         if (contents[contents_i] == '\\') {
             const res = std.zig.string_literal.parseEscapeSequence(contents, &contents_i).success;
-            buf[buf_i] = @intCast(u8, res);
+            buf[buf_i] = @as(u8, @intCast(res));
             buf_i += 1;
         } else {
             buf[buf_i] = contents[contents_i];
@@ -2795,7 +2876,9 @@ fn renderIdentifier(ais: *Ais, tree: Ast, token_index: Ast.TokenIndex, space: Sp
             return renderQuotedIdentifier(ais, tree, token_index, space, false);
         }
         if (primitives.isPrimitive(buf[0..buf_i])) switch (quote) {
-            .eagerly_unquote => return renderQuotedIdentifier(ais, tree, token_index, space, true),
+            .eagerly_unquote,
+            .eagerly_unquote_except_underscore,
+            => return renderQuotedIdentifier(ais, tree, token_index, space, true),
             .preserve_when_shadowing => return renderQuotedIdentifier(ais, tree, token_index, space, false),
         };
     }
@@ -2832,7 +2915,7 @@ fn renderIdentifierContents(writer: anytype, bytes: []const u8) !void {
                 switch (res) {
                     .success => |codepoint| {
                         if (codepoint <= 0x7f) {
-                            const buf = [1]u8{@intCast(u8, codepoint)};
+                            const buf = [1]u8{@as(u8, @intCast(codepoint))};
                             try std.fmt.format(writer, "{}", .{std.zig.fmtEscapes(&buf)});
                         } else {
                             try writer.writeAll(escape_sequence);
@@ -2844,7 +2927,7 @@ fn renderIdentifierContents(writer: anytype, bytes: []const u8) !void {
                 }
             },
             0x00...('\\' - 1), ('\\' + 1)...0x7f => {
-                const buf = [1]u8{@intCast(u8, byte)};
+                const buf = [1]u8{byte};
                 try std.fmt.format(writer, "{}", .{std.zig.fmtEscapes(&buf)});
                 pos += 1;
             },
@@ -2924,7 +3007,7 @@ fn renderComments(ais: *Ais, tree: Ast, start: usize, end: usize) Error!bool {
         const comment_content = mem.trimLeft(u8, trimmed_comment["//".len..], &std.ascii.whitespace);
         if (ais.disabled_offset != null and mem.eql(u8, comment_content, "zig fmt: on")) {
             // Write the source for which formatting was disabled directly
-            // to the underlying writer, fixing up invaild whitespace.
+            // to the underlying writer, fixing up invalid whitespace.
             const disabled_source = tree.source[ais.disabled_offset.?..comment_start];
             try writeFixingWhitespace(ais.underlying_writer, disabled_source);
             // Write with the canonical single space.
@@ -2941,7 +3024,10 @@ fn renderComments(ais: *Ais, tree: Ast, start: usize, end: usize) Error!bool {
     }
 
     if (index != start and mem.containsAtLeast(u8, tree.source[index - 1 .. end], 2, "\n")) {
-        try ais.insertNewline();
+        // Don't leave any whitespace at the end of the file
+        if (end != tree.source.len) {
+            try ais.insertNewline();
+        }
     }
 
     return index != start;

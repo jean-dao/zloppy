@@ -242,7 +242,7 @@ const Dir = struct {
             return null;
         }) |entry| {
             switch (entry.kind) {
-                .Directory => {
+                .directory => {
                     if (std.mem.eql(u8, entry.name, "zig-cache")) {
                         continue;
                     } else {
@@ -294,7 +294,7 @@ fn fmtDir(
             continue;
         };
 
-        if (stat.kind == .Directory) {
+        if (stat.kind == .directory) {
             // close file right away to not let open fd pile up
             file.close();
 

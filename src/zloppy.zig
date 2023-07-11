@@ -55,7 +55,7 @@ pub const Patches = struct {
         if (result.found_existing) {
             patch_idx = result.value_ptr.*;
         } else {
-            patch_idx = @intCast(PatchIndex, self.patches.items.len);
+            patch_idx = @intCast(self.patches.items.len);
             result.value_ptr.* = patch_idx;
             try self.patches.append(std.ArrayList(Patch).init(self.patches.allocator));
         }
@@ -485,7 +485,7 @@ const FnRetMap = struct {
     }
 
     fn pushNamespace(self: *FnRetMap, token: TokenIndex) !void {
-        const namespace_idx = @intCast(NamespaceIndex, self.namespaces.items.len);
+        const namespace_idx: NamespaceIndex = @intCast(self.namespaces.items.len);
         var namespace = Namespace.init(self.namespaces.allocator);
         try self.namespaces.append(namespace);
 
@@ -1069,18 +1069,18 @@ fn cleanLine(
     const descr = mem.trimLeft(u8, source[zloppy_comment_start + zloppy_comment.len .. end], " ");
     if (mem.startsWith(u8, descr, "unused var")) {
         // overwrite line '\n' (end + 1) to make sure no extraneous empty line is left over
-        mem.set(u8, source[start .. end + 1], ' ');
+        @memset(source[start .. end + 1], ' ');
     } else if (mem.startsWith(u8, descr, "unreachable code")) {
-        mem.set(u8, source[zloppy_comment_start..end], ' ');
+        @memset(source[zloppy_comment_start..end], ' ');
         if (mem.indexOf(u8, source[start..end], "//")) |first_comment| {
-            mem.set(u8, source[start + first_comment .. start + first_comment + 2], ' ');
+            @memset(source[start + first_comment .. start + first_comment + 2], ' ');
         } else {
             return error.InvalidCommentFound;
         }
     } else if (mem.startsWith(u8, descr, "ignored call return value")) {
-        mem.set(u8, source[zloppy_comment_start..end], ' ');
+        @memset(source[zloppy_comment_start..end], ' ');
         if (mem.indexOf(u8, source[start..end], "_ = ")) |ignore_stmt| {
-            mem.set(u8, source[start + ignore_stmt .. start + ignore_stmt + 3], ' ');
+            @memset(source[start + ignore_stmt .. start + ignore_stmt + 3], ' ');
         } else {
             return error.InvalidCommentFound;
         }
