@@ -1717,6 +1717,19 @@ test "zloppy on" {
     }
 }
 
+test "function parameter without type doesn't crash" {
+    var tree = try std.zig.Ast.parse(std.testing.allocator, "fn foo(bar: u64) {}", .zig);
+    defer tree.deinit(std.testing.allocator);
+    try std.testing.expect(tree.errors.len == 1);
+
+    var patches = zloppy.genPatches(std.testing.allocator, tree, true) catch |err| {
+        try std.testing.expectEqual(err, error.InvalidFnParam);
+        return;
+    };
+    defer patches.deinit();
+    try std.testing.expect(false);
+}
+
 const TestCase = struct {
     input: [:0]const u8,
     expected: [:0]const u8,

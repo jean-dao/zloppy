@@ -73,6 +73,8 @@ pub const Patches = struct {
 
 const TreeTraversalError = error{
     OutOfMemory,
+    InvalidFnProto,
+    InvalidFnParam,
 };
 
 fn traverseNodeExtraIndices(
@@ -864,12 +866,13 @@ const ZloppyChecks = struct {
             // create new scope and add bindings for fn args
             .fn_decl => {
                 try self.pushScope();
+                errdefer self.popScope();
 
                 var buf = [1]NodeIndex{0};
-                const fn_proto = tree.fullFnProto(&buf, node) orelse unreachable;
+                const fn_proto = tree.fullFnProto(&buf, node) orelse return error.InvalidFnProto;
                 var it = fn_proto.iterate(&tree);
                 while (it.next()) |param| {
-                    try self.addBinding(tree, node, param.name_token orelse unreachable);
+                    try self.addBinding(tree, node, param.name_token orelse return error.InvalidFnParam);
                 }
             },
 
