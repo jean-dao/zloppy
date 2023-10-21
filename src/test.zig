@@ -1718,7 +1718,7 @@ test "zloppy on" {
 }
 
 test "function parameter without type doesn't crash" {
-    var tree = try std.zig.Ast.parse(std.testing.allocator, "fn foo(bar: u64) {}", .zig);
+    var tree = try std.zig.Ast.parse(std.testing.allocator, "fn foo(bar) {}", .zig);
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 1);
 
