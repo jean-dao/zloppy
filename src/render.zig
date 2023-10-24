@@ -1,5 +1,5 @@
 // This file is a modified version of lib/std/zig/render.zig
-// Upstream version used: zig-0.11.0-dev.3947+89396ff02
+// Upstream version used: zig-0.12.0-dev.890+8c6b0271c
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -214,7 +214,7 @@ fn renderMember(
         .local_var_decl,
         .simple_var_decl,
         .aligned_var_decl,
-        => return renderVarDecl(gpa, ais, tree, tree.fullVarDecl(decl).?),
+        => return renderVarDecl(gpa, ais, tree, tree.fullVarDecl(decl).?, false, .semicolon),
 
         .test_decl => {
             const test_token = main_tokens[decl];
@@ -251,10 +251,12 @@ fn renderExpressions(gpa: Allocator, ais: *Ais, tree: Ast, expressions: []const 
 }
 
 fn renderExpression(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, space: Space) Error!void {
-    // If patches are anchored on this node, and this node is not a block, it
+    const tag = tree.nodes.items(.tag)[node];
+
+    // If patches are anchored on this node, and this node is not a block nor a destructure, it
     // means the expression is a single-statement then_expr and must be
     // rendered surrounded by a block, to include the related zloppy patches
-    if (!nodeIsBlock(tree.nodes.items(.tag)[node])) {
+    if (!nodeIsBlock(tag) and tag != .assign_destructure) {
         if (ais.patches.get(tree.nodes.items(.main_token)[node])) |tok_patches| {
             try ais.writer().writeAll("{\n");
             ais.pushIndent();
@@ -273,7 +275,21 @@ fn renderExpression(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, 
         }
     }
 
-    return renderExpressionInner(gpa, ais, tree, node, space);
+    try renderExpressionInner(gpa, ais, tree, node, space);
+
+    // Destructure nodes will have patches related to all variables attached here
+    if (tag == .assign_destructure) {
+        if (ais.patches.get(tree.nodes.items(.main_token)[node])) |tok_patches| {
+            for (tok_patches) |patch| {
+                switch (patch) {
+                    .unused_var => |token| {
+                        try renderZloppyUnused(ais, tree, token);
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
 }
 
 fn renderExpressionInner(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.Index, space: Space) Error!void {
@@ -501,6 +517,42 @@ fn renderExpressionInner(gpa: Allocator, ais: *Ais, tree: Ast, node: Ast.Node.In
             }
             ais.pushIndentOneShot();
             return renderExpression(gpa, ais, tree, infix.rhs, space);
+        },
+
+        .assign_destructure => {
+            const lhs_count = tree.extra_data[datas[node].lhs];
+            assert(lhs_count > 1);
+            const lhs_exprs = tree.extra_data[datas[node].lhs + 1 ..][0..lhs_count];
+            const rhs = datas[node].rhs;
+
+            const maybe_comptime_token = tree.firstToken(node) - 1;
+            if (token_tags[maybe_comptime_token] == .keyword_comptime) {
+                try renderToken(ais, tree, maybe_comptime_token, .space);
+            }
+
+            for (lhs_exprs, 0..) |lhs_node, i| {
+                const lhs_space: Space = if (i == lhs_exprs.len - 1) .space else .comma_space;
+                switch (node_tags[lhs_node]) {
+                    .global_var_decl,
+                    .local_var_decl,
+                    .simple_var_decl,
+                    .aligned_var_decl,
+                    => {
+                        try renderVarDecl(gpa, ais, tree, tree.fullVarDecl(lhs_node).?, true, lhs_space);
+                    },
+                    else => try renderExpression(gpa, ais, tree, lhs_node, lhs_space),
+                }
+            }
+            const equal_token = main_tokens[node];
+            if (tree.tokensOnSameLine(equal_token, equal_token + 1)) {
+                try renderToken(ais, tree, equal_token, .space);
+            } else {
+                ais.pushIndent();
+                try renderToken(ais, tree, equal_token, .newline);
+                ais.popIndent();
+            }
+            ais.pushIndentOneShot();
+            return renderExpression(gpa, ais, tree, rhs, space);
         },
 
         .bit_not,
@@ -1019,8 +1071,21 @@ fn renderAsmInput(
     return renderToken(ais, tree, datas[asm_input].rhs, space); // rparen
 }
 
-fn renderVarDecl(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.VarDecl) Error!void {
-    try renderVarDeclInner(gpa, ais, tree, var_decl);
+fn renderVarDecl(
+    gpa: Allocator,
+    ais: *Ais,
+    tree: Ast,
+    var_decl: Ast.full.VarDecl,
+    /// Destructures intentionally ignore leading `comptime` tokens.
+    ignore_comptime_token: bool,
+    /// `comma_space` and `space` are used for destructure LHS decls.
+    space: Space,
+) Error!void {
+    try renderVarDeclInner(gpa, ais, tree, var_decl, ignore_comptime_token, space);
+
+    // Destructures are taken care of in `renderExpression`
+    if (space == .space or space == .comma_space)
+        return;
 
     if (ais.patches.get(var_decl.ast.mut_token)) |tok_patches| {
         for (tok_patches) |patch| {
@@ -1032,7 +1097,16 @@ fn renderVarDecl(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.VarDec
     }
 }
 
-fn renderVarDeclInner(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.VarDecl) Error!void {
+fn renderVarDeclInner(
+    gpa: Allocator,
+    ais: *Ais,
+    tree: Ast,
+    var_decl: Ast.full.VarDecl,
+    /// Destructures intentionally ignore leading `comptime` tokens.
+    ignore_comptime_token: bool,
+    /// `comma_space` and `space` are used for destructure LHS decls.
+    space: Space,
+) Error!void {
     if (var_decl.visib_token) |visib_token| {
         try renderToken(ais, tree, visib_token, Space.space); // pub
     }
@@ -1049,21 +1123,31 @@ fn renderVarDeclInner(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.V
         try renderToken(ais, tree, thread_local_token, Space.space); // threadlocal
     }
 
-    if (var_decl.comptime_token) |comptime_token| {
-        try renderToken(ais, tree, comptime_token, Space.space); // comptime
+    if (!ignore_comptime_token) {
+        if (var_decl.comptime_token) |comptime_token| {
+            try renderToken(ais, tree, comptime_token, Space.space); // comptime
+        }
     }
 
     try renderToken(ais, tree, var_decl.ast.mut_token, .space); // var
 
-    const name_space = if (var_decl.ast.type_node == 0 and
-        (var_decl.ast.align_node != 0 or
-        var_decl.ast.addrspace_node != 0 or
-        var_decl.ast.section_node != 0 or
-        var_decl.ast.init_node != 0))
-        Space.space
-    else
-        Space.none;
-    try renderIdentifier(ais, tree, var_decl.ast.mut_token + 1, name_space, .preserve_when_shadowing); // name
+    if (var_decl.ast.type_node != 0 or var_decl.ast.align_node != 0 or
+        var_decl.ast.addrspace_node != 0 or var_decl.ast.section_node != 0 or
+        var_decl.ast.init_node != 0)
+    {
+        const name_space = if (var_decl.ast.type_node == 0 and
+            (var_decl.ast.align_node != 0 or
+            var_decl.ast.addrspace_node != 0 or
+            var_decl.ast.section_node != 0 or
+            var_decl.ast.init_node != 0))
+            Space.space
+        else
+            Space.none;
+
+        try renderIdentifier(ais, tree, var_decl.ast.mut_token + 1, name_space, .preserve_when_shadowing); // name
+    } else {
+        return renderIdentifier(ais, tree, var_decl.ast.mut_token + 1, space, .preserve_when_shadowing); // name
+    }
 
     if (var_decl.ast.type_node != 0) {
         try renderToken(ais, tree, var_decl.ast.mut_token + 2, Space.space); // :
@@ -1072,9 +1156,7 @@ fn renderVarDeclInner(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.V
         {
             try renderExpression(gpa, ais, tree, var_decl.ast.type_node, .space);
         } else {
-            try renderExpression(gpa, ais, tree, var_decl.ast.type_node, .none);
-            const semicolon = tree.lastToken(var_decl.ast.type_node) + 1;
-            return renderToken(ais, tree, semicolon, Space.newline); // ;
+            return renderExpression(gpa, ais, tree, var_decl.ast.type_node, space);
         }
     }
 
@@ -1090,8 +1172,7 @@ fn renderVarDeclInner(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.V
         {
             try renderToken(ais, tree, rparen, .space); // )
         } else {
-            try renderToken(ais, tree, rparen, .none); // )
-            return renderToken(ais, tree, rparen + 1, Space.newline); // ;
+            return renderToken(ais, tree, rparen, space); // )
         }
     }
 
@@ -1120,23 +1201,21 @@ fn renderVarDeclInner(gpa: Allocator, ais: *Ais, tree: Ast, var_decl: Ast.full.V
         if (var_decl.ast.init_node != 0) {
             try renderToken(ais, tree, rparen, .space); // )
         } else {
-            try renderToken(ais, tree, rparen, .none); // )
-            return renderToken(ais, tree, rparen + 1, Space.newline); // ;
+            return renderToken(ais, tree, rparen, space); // )
         }
     }
 
-    if (var_decl.ast.init_node != 0) {
-        const eq_token = tree.firstToken(var_decl.ast.init_node) - 1;
-        const eq_space: Space = if (tree.tokensOnSameLine(eq_token, eq_token + 1)) .space else .newline;
-        {
-            ais.pushIndent();
-            try renderToken(ais, tree, eq_token, eq_space); // =
-            ais.popIndent();
-        }
-        ais.pushIndentOneShot();
-        return renderExpression(gpa, ais, tree, var_decl.ast.init_node, .semicolon); // ;
+    assert(var_decl.ast.init_node != 0);
+
+    const eq_token = tree.firstToken(var_decl.ast.init_node) - 1;
+    const eq_space: Space = if (tree.tokensOnSameLine(eq_token, eq_token + 1)) .space else .newline;
+    {
+        ais.pushIndent();
+        try renderToken(ais, tree, eq_token, eq_space); // =
+        ais.popIndent();
     }
-    return renderToken(ais, tree, var_decl.ast.mut_token + 2, .newline); // ;
+    ais.pushIndentOneShot();
+    return renderExpression(gpa, ais, tree, var_decl.ast.init_node, space); // ;
 }
 
 fn renderIf(gpa: Allocator, ais: *Ais, tree: Ast, if_node: Ast.full.If, space: Space) Error!void {
@@ -1485,7 +1564,7 @@ fn renderBuiltinCall(
     const slice = tree.tokenSlice(builtin_token);
     const rewrite_two_param_cast = params.len == 2 and for ([_][]const u8{
         "@bitCast",
-        "@errSetCast",
+        "@errorCast",
         "@floatCast",
         "@intCast",
         "@ptrCast",
@@ -1544,6 +1623,10 @@ fn renderBuiltinCall(
         try ais.writer().writeAll("@ptrFromInt");
     } else if (mem.eql(u8, slice, "@ptrToInt")) {
         try ais.writer().writeAll("@intFromPtr");
+    } else if (mem.eql(u8, slice, "@fabs")) {
+        try ais.writer().writeAll("@abs");
+    } else if (mem.eql(u8, slice, "@errSetCast")) {
+        try ais.writer().writeAll("@errorCast");
     } else {
         try renderToken(ais, tree, builtin_token, .none); // @name
     }
@@ -1948,7 +2031,7 @@ fn renderBlock(
                 .local_var_decl,
                 .simple_var_decl,
                 .aligned_var_decl,
-                => try renderVarDecl(gpa, ais, tree, tree.fullVarDecl(stmt).?),
+                => try renderVarDecl(gpa, ais, tree, tree.fullVarDecl(stmt).?, false, .semicolon),
                 else => {
                     for (ignored_fn_calls.items) |token| {
                         if (main_token == token) {

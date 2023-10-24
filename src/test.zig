@@ -226,6 +226,22 @@ const test_cases_off = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = a; // XXX ZLOPPY unused var a
+            \\    _ = b; // XXX ZLOPPY unused var b
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
@@ -1651,6 +1667,56 @@ const test_cases_on = [_]TestCase{
             \\        _ = foo; // XXX ZLOPPY unused var foo
             \\        _ = i; // XXX ZLOPPY unused var i
             \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = b; // XXX ZLOPPY unused var b
+            \\    _ = a; // XXX ZLOPPY unused var a
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = a;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = b; // XXX ZLOPPY unused var b
+            \\    _ = a;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = b;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    const a: bool, const b: bool = .{ true, false };
+            \\    _ = a; // XXX ZLOPPY unused var a
+            \\    _ = b;
             \\}
             \\
         ,

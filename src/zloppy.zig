@@ -20,6 +20,7 @@ pub const Patches = struct {
         // captures: if block exists, anchored on block main token (lbrace)
         // if not, anchored on statement main token
         // declarations: anchored on decl main token (`var` or `const`)
+        // assign_destructures: anchored on first assign main token (`var` or `const`)
         unused_var: TokenIndex,
 
         // anchored on block main token (lbrace)
@@ -402,6 +403,20 @@ fn traverseNode(
                 if (!cont) break :blk;
             },
 
+            // special case: assign_destructure
+            .assign_destructure => {
+                const extra_idx = datas[node].lhs;
+                const lhs_len = tree.extra_data[extra_idx];
+                const first_idx = extra_idx + 1;
+                for (first_idx..first_idx + lhs_len) |idx| {
+                    cont = try traverseNode(action, patches, tree, node, tree.extra_data[idx]);
+                    if (!cont) break :blk;
+                }
+
+                cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
+                if (!cont) break :blk;
+            },
+
             else => {},
         }
     }
@@ -695,6 +710,7 @@ const ZloppyChecks = struct {
         unreachable_from: TokenIndex,
     },
     fn_ret_map: ?FnRetMap,
+    destructure_anchor: TokenIndex = 0,
 
     fn init(gpa: mem.Allocator, fn_ret_map: ?FnRetMap) !ZloppyChecks {
         var self = ZloppyChecks{
@@ -787,7 +803,11 @@ const ZloppyChecks = struct {
         if (mem.eql(u8, "_", tree.tokenSlice(token)))
             return;
 
-        const anchor = anchorFromNode(tree, node);
+        const anchor = if (self.destructure_anchor != 0)
+            self.destructure_anchor
+        else
+            anchorFromNode(tree, node);
+
         try self.bindings.append(.{ .token = token, .anchor = anchor });
     }
 
@@ -890,6 +910,8 @@ const ZloppyChecks = struct {
             => {
                 try self.pushScope();
             },
+
+            .assign_destructure => self.destructure_anchor = tree.nodes.items(.main_token)[node],
 
             else => {},
         }
@@ -995,6 +1017,8 @@ const ZloppyChecks = struct {
                     else => {},
                 };
             },
+
+            .assign_destructure => self.destructure_anchor = 0,
 
             else => {},
         }
