@@ -1721,6 +1721,28 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\const Foo = union(enum) {
+            \\    foo,
+            \\    bar,
+            \\
+            \\    fn baz(quux: bool) void {}
+            \\};
+            \\
+        ,
+        .expected =
+            \\const Foo = union(enum) {
+            \\    foo,
+            \\    bar,
+            \\
+            \\    fn baz(quux: bool) void {
+            \\        _ = quux; // XXX ZLOPPY unused var quux
+            \\    }
+            \\};
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

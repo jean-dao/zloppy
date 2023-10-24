@@ -120,6 +120,8 @@ fn traverseNode(
             .builtin_call_comma,
             .container_decl,
             .container_decl_trailing,
+            .tagged_union,
+            .tagged_union_trailing,
             => {
                 const first = datas[node].lhs;
                 const last = datas[node].rhs;
