@@ -163,7 +163,7 @@ fn fmtFile(
             added = patches.rendered_comments;
         },
         .off => {
-            try tree.renderToArrayList(&out_buffer);
+            try tree.renderToArrayList(&out_buffer, .{});
         },
     }
 
@@ -205,10 +205,10 @@ const TopLevelDir = struct {
 };
 
 const Dir = struct {
-    dir: std.fs.IterableDir,
+    dir: std.fs.Dir,
     path: []const u8,
     fullpath: []const u8,
-    iterator: std.fs.IterableDir.Iterator,
+    iterator: std.fs.Dir.Iterator,
 
     fn init(
         parent: std.fs.Dir,
@@ -216,7 +216,7 @@ const Dir = struct {
         fullpath: []const u8,
     ) !Dir {
         var self = Dir{
-            .dir = try parent.openIterableDir(path, .{}),
+            .dir = try parent.openDir(path, .{ .iterate = true }),
             .path = path,
             .fullpath = fullpath,
             .iterator = undefined,
@@ -230,9 +230,9 @@ const Dir = struct {
         const left_len = self.fullpath.len;
         const sep_len = std.fs.path.sep_str.len;
         var new_path = gpa.alloc(u8, left_len + sep_len + path.len) catch |err| fatalOom(err);
-        std.mem.copy(u8, new_path, self.fullpath);
-        std.mem.copy(u8, new_path[left_len..], std.fs.path.sep_str);
-        std.mem.copy(u8, new_path[left_len + sep_len ..], path);
+        @memcpy(new_path[0..left_len], self.fullpath);
+        @memcpy(new_path[left_len..][0..sep_len], std.fs.path.sep_str);
+        @memcpy(new_path[left_len + sep_len ..], path);
         return new_path;
     }
 
@@ -263,7 +263,7 @@ const Dir = struct {
     }
 
     fn getDir(self: *Dir) std.fs.Dir {
-        return self.dir.dir;
+        return self.dir;
     }
 
     fn deinit(self: *Dir) void {

@@ -1,6 +1,6 @@
 # zloppy
 
-Sloppy mode for Zig.
+Sloppy mode for Zig 0.12.0.
 
 Tool to automatically silence compiler errors about unused variables and
 unreachable code. Incidentally format code like `zig fmt` would do.

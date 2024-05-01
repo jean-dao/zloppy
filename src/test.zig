@@ -1776,7 +1776,7 @@ fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
     var out_buffer = std.ArrayList(u8).init(std.testing.allocator);
     defer out_buffer.deinit();
 
-    try tree.renderToArrayList(&out_buffer);
+    try tree.renderToArrayList(&out_buffer, .{});
     try std.testing.expectEqualStrings(expected, out_buffer.items);
 
     try out_buffer.append(0);
@@ -1786,7 +1786,7 @@ fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
 fn applyFn(fun: anytype, count: u8, input: [:0]const u8, expected: [:0]const u8) !void {
     var last_output = try std.testing.allocator.dupe(u8, input[0 .. input.len + 1]);
     for (0..count) |_| {
-        var output = try fun(last_output[0 .. last_output.len - 1 :0], expected);
+        const output = try fun(last_output[0 .. last_output.len - 1 :0], expected);
         std.testing.allocator.free(last_output);
         last_output = output;
     }

@@ -505,7 +505,7 @@ const FnRetMap = struct {
 
     fn pushNamespace(self: *FnRetMap, token: TokenIndex) !void {
         const namespace_idx: NamespaceIndex = @intCast(self.namespaces.items.len);
-        var namespace = Namespace.init(self.namespaces.allocator);
+        const namespace = Namespace.init(self.namespaces.allocator);
         try self.namespaces.append(namespace);
 
         const parent_namespace_idx = self.cur_chain.items[self.cur_chain.items.len - 1];
