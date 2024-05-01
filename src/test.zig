@@ -1743,6 +1743,81 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(bar: bool) void {
+            \\    defer {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo(bar: bool) void {
+            \\    defer {
+            \\        _ = bar;
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    errdefer unreachable;
+            \\    // the next statement is reachable
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    errdefer unreachable;
+            \\    // the next statement is reachable
+            \\    _ = 42;
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    defer {
+            \\        const a = 42;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    defer {
+            \\        const a = 42;
+            \\        _ = a; // XXX ZLOPPY unused var a
+            \\    }
+            \\}
+            \\
+        ,
+    },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    defer {
+            \\        unreachable;
+            \\        const a = 42;
+            \\    }
+            \\}
+            \\
+        ,
+        .expected =
+            \\fn foo() void {
+            \\    defer {
+            \\        unreachable;
+            \\        //const a = 42; // XXX ZLOPPY unreachable code
+            \\    }
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

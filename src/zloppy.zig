@@ -898,7 +898,7 @@ const ZloppyChecks = struct {
                 }
             },
 
-            // create a new scope for blocks and containers
+            // create a new scope for blocks, containers and defers
             .container_decl,
             .container_decl_trailing,
             .container_decl_two,
@@ -909,6 +909,8 @@ const ZloppyChecks = struct {
             .block_two_semicolon,
             .block,
             .block_semicolon,
+            .@"defer",
+            .@"errdefer",
             => {
                 try self.pushScope();
             },
@@ -943,13 +945,15 @@ const ZloppyChecks = struct {
                 return;
             },
 
-            // only pop scope in containers, don't check for unused variables
+            // only pop scope in containers and defers, don't check for unused variables
             .container_decl,
             .container_decl_trailing,
             .container_decl_two,
             .container_decl_two_trailing,
             .container_decl_arg,
             .container_decl_arg_trailing,
+            .@"defer",
+            .@"errdefer",
             => {
                 self.popScope();
                 return;
