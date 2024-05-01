@@ -5,6 +5,8 @@ Sloppy mode for Zig 0.12.0.
 Tool to automatically silence compiler errors about unused variables and
 unreachable code. Incidentally format code like `zig fmt` would do.
 
+![](demo.webp)
+
 ## Status
 
 Still in early development, expect bugs. Can be run on the stdlib and stage2
