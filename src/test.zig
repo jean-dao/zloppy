@@ -1818,6 +1818,31 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo() void {
+            \\    _ = root: switch (5) {
+            \\        inline 0,
+            \\        1,
+            \\        => |step| continue :root step,
+            \\        else => |step| break :root step,
+            \\    };
+            \\}
+            \\
+        ,
+
+        .expected =
+            \\fn foo() void {
+            \\    _ = root: switch (5) {
+            \\        inline 0,
+            \\        1,
+            \\        => |step| continue :root step,
+            \\        else => |step| break :root step,
+            \\    };
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 

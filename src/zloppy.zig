@@ -308,6 +308,7 @@ fn traverseNode(
             .@"errdefer",
             .@"defer",
             .@"break",
+            .@"continue",
             => {
                 if (datas[node].rhs != 0) {
                     cont = try traverseNode(action, patches, tree, node, datas[node].rhs);
