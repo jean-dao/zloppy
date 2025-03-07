@@ -56,7 +56,7 @@ const Params = struct {
     };
 };
 
-fn parseParams(gpa: std.mem.Allocator, args: [][:0]const u8) Params {
+fn parseParams(gpa: std.mem.Allocator, args: []const [:0]const u8) Params {
     var params = Params{
         .cmd = undefined,
         .stdin = false,
