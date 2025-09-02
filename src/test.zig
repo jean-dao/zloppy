@@ -1345,24 +1345,6 @@ const test_cases_on = [_]TestCase{
     },
     .{
         .input =
-            \\fn Foo(comptime T: type) type {
-            \\    return struct {
-            \\        pub usingnamespace T;
-            \\    };
-            \\}
-            \\
-        ,
-        .expected =
-            \\fn Foo(comptime T: type) type {
-            \\    return struct {
-            \\        pub usingnamespace T;
-            \\    };
-            \\}
-            \\
-        ,
-    },
-    .{
-        .input =
             \\fn foo(comptime s: u8) [4:s]u8 {}
             \\
         ,
@@ -1437,54 +1419,6 @@ const test_cases_on = [_]TestCase{
             \\
             \\fn bar() void {
             \\    foo();
-            \\}
-            \\
-        ,
-    },
-    .{
-        .input =
-            \\fn foo() u32 {
-            \\    return 0;
-            \\}
-            \\
-            \\fn bar() void {
-            \\    foo();
-            \\}
-            \\
-        ,
-        .expected =
-            \\fn foo() u32 {
-            \\    return 0;
-            \\}
-            \\
-            \\fn bar() void {
-            \\    _ = foo(); // XXX ZLOPPY ignored call return value
-            \\}
-            \\
-        ,
-    },
-    .{
-        .input =
-            \\const Foo = struct {
-            \\    fn quux() u32 {
-            \\        return 0;
-            \\    }
-            \\};
-            \\
-            \\fn bar() void {
-            \\    Foo.quux();
-            \\}
-            \\
-        ,
-        .expected =
-            \\const Foo = struct {
-            \\    fn quux() u32 {
-            \\        return 0;
-            \\    }
-            \\};
-            \\
-            \\fn bar() void {
-            \\    _ = Foo.quux(); // XXX ZLOPPY ignored call return value
             \\}
             \\
         ,
@@ -1843,50 +1777,80 @@ const test_cases_on = [_]TestCase{
             \\
         ,
     },
+    .{
+        .input =
+            \\fn foo(x: u128, y: u128) u128 {
+            \\    const product = asm (
+            \\        \\ pmull %[out].1q, %[x].1d, %[y].1d
+            \\        : [out] "=w" (-> @Vector(2, u64)),
+            \\        : [x] "w" (@as(@Vector(2, u64), @bitCast(x >> 64))),
+            \\          [y] "w" (@as(@Vector(2, u64), @bitCast(y))),
+            \\    );
+            \\    return @as(u128, @bitCast(product));
+            \\}
+            \\
+        ,
+
+        .expected =
+            \\fn foo(x: u128, y: u128) u128 {
+            \\    const product = asm (
+            \\        \\ pmull %[out].1q, %[x].1d, %[y].1d
+            \\        : [out] "=w" (-> @Vector(2, u64)),
+            \\        : [x] "w" (@as(@Vector(2, u64), @bitCast(x >> 64))),
+            \\          [y] "w" (@as(@Vector(2, u64), @bitCast(y))),
+            \\    );
+            \\    return @as(u128, @bitCast(product));
+            \\}
+            \\
+        ,
+    },
 };
 // zig fmt: on
 
-fn applyOn(input: [:0]u8, expected: []const u8) ![]u8 {
+fn applyOn(input: [:0]u8, expected: []const u8) ![:0]u8 {
     _ = try zloppy.cleanSource("<test input>", input);
 
     var tree = try std.zig.Ast.parse(std.testing.allocator, input, .zig);
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 0);
 
-    var patches = try zloppy.genPatches(std.testing.allocator, tree, true);
-    defer patches.deinit();
+    var patches = try zloppy.genPatches(std.testing.allocator, tree);
+    defer patches.deinit(std.testing.allocator);
 
-    var out_buffer = std.ArrayList(u8).init(std.testing.allocator);
-    defer out_buffer.deinit();
+    var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    try @import("render.zig").renderTreeWithPatches(
+        std.testing.allocator,
+        &writer.writer,
+        tree,
+        &patches,
+    );
 
-    try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, &patches);
+    var out_buffer: std.ArrayList(u8) = writer.toArrayList();
     try std.testing.expectEqualStrings(expected, out_buffer.items);
 
-    try out_buffer.append(0);
-    return out_buffer.toOwnedSlice();
+    return out_buffer.toOwnedSliceSentinel(std.testing.allocator, 0);
 }
 
-fn applyOff(input: [:0]u8, expected: []const u8) ![]u8 {
+fn applyOff(input: [:0]u8, expected: []const u8) ![:0]u8 {
     _ = try zloppy.cleanSource("<test input>", input);
 
     var tree = try std.zig.Ast.parse(std.testing.allocator, input, .zig);
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 0);
 
-    var out_buffer = std.ArrayList(u8).init(std.testing.allocator);
-    defer out_buffer.deinit();
+    var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    try tree.render(std.testing.allocator, &writer.writer, .{});
 
-    try tree.renderToArrayList(&out_buffer, .{});
+    var out_buffer: std.ArrayList(u8) = writer.toArrayList();
     try std.testing.expectEqualStrings(expected, out_buffer.items);
 
-    try out_buffer.append(0);
-    return out_buffer.toOwnedSlice();
+    return out_buffer.toOwnedSliceSentinel(std.testing.allocator, 0);
 }
 
-fn applyFn(fun: anytype, count: u8, input: [:0]const u8, expected: [:0]const u8) !void {
-    var last_output = try std.testing.allocator.dupe(u8, input[0 .. input.len + 1]);
+fn applyFn(fun: anytype, count: u8, input: [:0]const u8, expected: []const u8) !void {
+    var last_output = try std.testing.allocator.dupeZ(u8, input);
     for (0..count) |_| {
-        const output = try fun(last_output[0 .. last_output.len - 1 :0], expected);
+        const output = try fun(last_output, expected);
         std.testing.allocator.free(last_output);
         last_output = output;
     }
@@ -1910,15 +1874,15 @@ test "function parameter without type doesn't crash" {
     defer tree.deinit(std.testing.allocator);
     try std.testing.expect(tree.errors.len == 1);
 
-    var patches = zloppy.genPatches(std.testing.allocator, tree, true) catch |err| {
+    var patches = zloppy.genPatches(std.testing.allocator, tree) catch |err| {
         try std.testing.expectEqual(err, error.InvalidFnParam);
         return;
     };
-    defer patches.deinit();
+    defer patches.deinit(std.testing.allocator);
     try std.testing.expect(false);
 }
 
 const TestCase = struct {
     input: [:0]const u8,
-    expected: [:0]const u8,
+    expected: []const u8,
 };

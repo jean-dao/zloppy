@@ -13,11 +13,6 @@ const usage =
     \\Options:
     \\    -h, --help      Print this help and exit
     \\    --stdin         Format code from stdin; output to stdout
-    \\    --experimental  Enable experimental features:
-    \\                      - Silence errors about ignored fn return values.
-    \\                        Only functions defined in the same files are checked,
-    \\                        return types depending on comptime features may lead
-    \\                        to false positives.
     \\
     \\Commands:
     \\    on          Enable sloppy mode
@@ -47,7 +42,6 @@ fn logErr(err: anyerror, comptime format: []const u8, args: anytype) void {
 const Params = struct {
     cmd: Cmd,
     stdin: bool,
-    experimental: bool,
     input_paths: std.ArrayList([]const u8),
 
     const Cmd = enum {
@@ -57,11 +51,10 @@ const Params = struct {
 };
 
 fn parseParams(gpa: std.mem.Allocator, args: []const [:0]const u8) Params {
-    var params = Params{
+    var params: Params = .{
         .cmd = undefined,
         .stdin = false,
-        .experimental = false,
-        .input_paths = std.ArrayList([]const u8).init(gpa),
+        .input_paths = .{},
     };
 
     {
@@ -75,8 +68,6 @@ fn parseParams(gpa: std.mem.Allocator, args: []const [:0]const u8) Params {
                 std.process.exit(0);
             } else if (std.mem.eql(u8, arg, "--stdin")) {
                 params.stdin = true;
-            } else if (std.mem.eql(u8, arg, "--experimental")) {
-                params.experimental = true;
             } else {
                 fatal("unrecognized parameter: '{s}'", .{arg});
             }
@@ -102,7 +93,7 @@ fn parseParams(gpa: std.mem.Allocator, args: []const [:0]const u8) Params {
 
         // files
         while (i < args.len) : (i += 1) {
-            params.input_paths.append(args[i]) catch |err| fatalOom(err);
+            params.input_paths.append(gpa, args[i]) catch |err| fatalOom(err);
         }
     }
 
@@ -125,51 +116,52 @@ const FmtResult = struct {
 };
 
 fn fmtFile(
-    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
     cmd: Params.Cmd,
     input_file: *const std.fs.File,
     filename: []const u8,
     size_hint: ?usize,
-    fix_ret_vals: bool,
 ) !FmtResult {
     const source = try input_file.readToEndAllocOptions(
-        gpa,
+        arena,
         std.math.maxInt(u32),
         size_hint,
-        @alignOf(u16),
+        .@"16",
         0,
     );
-    defer gpa.free(source);
 
     const removed = try zloppy.cleanSource(filename, source);
 
-    var tree = try std.zig.Ast.parse(gpa, source, .zig);
-    defer tree.deinit(gpa);
+    var tree = try std.zig.Ast.parse(arena, source, .zig);
 
     if (tree.errors.len != 0) {
         return error.ParsingError;
     }
 
-    var out_buffer = std.ArrayList(u8).init(gpa);
-    defer out_buffer.deinit();
+    var out_buffer: std.Io.Writer.Allocating = .init(arena);
 
     var added: u32 = 0;
     switch (cmd) {
         .on => {
-            var patches = try zloppy.genPatches(gpa, tree, fix_ret_vals);
-            defer patches.deinit();
+            var patches = try zloppy.genPatches(arena, tree);
 
-            try @import("render.zig").renderTreeWithPatches(&out_buffer, tree, &patches);
+            try @import("Render.zig").renderTreeWithPatches(
+                arena,
+                &out_buffer.writer,
+                tree,
+                &patches,
+            );
             added = patches.rendered_comments;
         },
         .off => {
-            try tree.renderToArrayList(&out_buffer, .{});
+            try tree.render(arena, &out_buffer.writer, .{});
         },
     }
 
+    const content = out_buffer.writer.buffered();
     return FmtResult{
-        .noop = std.mem.eql(u8, out_buffer.items, source),
-        .content = try out_buffer.toOwnedSlice(),
+        .noop = std.mem.eql(u8, content, source),
+        .content = content,
         .comments_removed = removed,
         .comments_added = added,
     };
@@ -273,9 +265,9 @@ const Dir = struct {
 
 fn fmtDir(
     gpa: std.mem.Allocator,
+    arena_instance: *std.heap.ArenaAllocator,
     cmd: Params.Cmd,
     dir: anytype,
-    fix_ret_vals: bool,
 ) error{FmtDirError}!void {
     var has_error = false;
     while (dir.getNextFileName()) |path| {
@@ -305,31 +297,44 @@ fn fmtDir(
             };
             defer subdir.deinit();
 
-            fmtDir(gpa, cmd, &subdir, fix_ret_vals) catch {
+            fmtDir(gpa, arena_instance, cmd, &subdir) catch {
                 has_error = true;
                 continue;
             };
         } else {
+            defer {
+                _ = arena_instance.reset(.retain_capacity);
+            }
+
             // close file after reading content
             defer file.close();
-            const result = fmtFile(gpa, cmd, &file, fullpath, stat.size, fix_ret_vals) catch |err| {
+            const result = fmtFile(
+                arena_instance.allocator(),
+                cmd,
+                &file,
+                path,
+                stat.size,
+            ) catch |err| {
                 logErr(err, "failed to format file '{s}'", .{fullpath});
                 has_error = true;
                 continue;
             };
-            defer gpa.free(result.content);
 
             if (result.noop)
                 continue;
 
-            var af = dir.getDir().atomicFile(path, .{ .mode = stat.mode }) catch |err| {
+            var buffer: [1024]u8 = undefined;
+            var af = dir.getDir().atomicFile(
+                path,
+                .{ .mode = stat.mode, .write_buffer = &buffer },
+            ) catch |err| {
                 logErr(err, "failed to initialize atomic write on '{s}'", .{fullpath});
                 has_error = true;
                 continue;
             };
             defer af.deinit();
 
-            af.file.writeAll(result.content) catch |err| {
+            _ = af.file_writer.interface.write(result.content) catch |err| {
                 logErr(err, "failed to write content of {s} to temporary file", .{fullpath});
                 has_error = true;
                 continue;
@@ -357,33 +362,41 @@ fn fmtDir(
 }
 
 pub fn main() !void {
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance: std.heap.GeneralPurposeAllocator(.{}) = .{};
     const gpa = gpa_instance.allocator();
     defer {
         _ = gpa_instance.deinit();
     }
 
+    var arena_instance: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_instance.deinit();
+
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
     std.debug.assert(args.len > 0);
-    const params = parseParams(gpa, args[1..]);
-    defer params.input_paths.deinit();
+    var params = parseParams(gpa, args[1..]);
+    defer params.input_paths.deinit(gpa);
 
     if (params.stdin) {
-        var stdin = std.io.getStdIn();
-        const result = fmtFile(gpa, params.cmd, &stdin, "<stdin>", null, params.experimental) catch |err| {
+        var stdin = std.fs.File.stdin();
+        const result = fmtFile(
+            arena_instance.allocator(),
+            params.cmd,
+            &stdin,
+            "<stdin>",
+            null,
+        ) catch |err| {
             logErr(err, "failed to format stdin", .{});
             std.process.exit(1);
         };
-        defer gpa.free(result.content);
-        std.io.getStdOut().writeAll(result.content) catch |err| {
+        _ = std.fs.File.stdout().write(result.content) catch |err| {
             logErr(err, "failed to write to stdout", .{});
             std.process.exit(1);
         };
     } else {
         var cwd = TopLevelDir{ .file_paths = params.input_paths.items };
-        fmtDir(gpa, params.cmd, &cwd, params.experimental) catch {
+        fmtDir(gpa, &arena_instance, params.cmd, &cwd) catch {
             std.process.exit(1);
         };
     }
